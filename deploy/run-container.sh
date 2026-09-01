@@ -16,8 +16,9 @@ AUTH_FILE="/opt/lumen-secrets/htpasswd"   # basic-auth for the whole dashboard
 mkdir -p "$DATA"/{data,uploads,config,logs}
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
-# Traefik reads the htpasswd users from a label; '$' must be doubled.
-USERS=$(sed 's/\$/\$\$/g' "$AUTH_FILE")
+# Traefik reads the htpasswd users from a label. With plain `docker run` the
+# value is taken literally (no `$$` escaping — that is a docker-compose rule).
+USERS=$(cat "$AUTH_FILE")
 
 docker run -d \
   --name "$NAME" \
