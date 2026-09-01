@@ -143,6 +143,10 @@ function renderDashboard() {
   renderEngagement(ui.state.engagement || {});
   renderActivation(state.activation);
   renderReadiness(state.readiness);
+  renderSpend(state.usage);
+  renderAutomationCard(state);
+  renderNextUpload(state);
+  renderCostEfficiency(state.usage?.efficiency);
   renderOperator(state.channelStrategy, state.operatorRuns || [], { ...state.system, readiness: state.readiness });
   populateSettings(state.profile, state.settings, state.system.videoProviders || []);
 }
@@ -652,6 +656,210 @@ function retentionChart(snapshot = {}) {
     <text x="${left}" y="${height - 10}" text-anchor="start">Start</text>
     <text x="${width - right}" y="${height - 10}" text-anchor="end">End</text>
   </svg>`;
+}
+
+function formatMoney(value, currency = 'USD', digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD', minimumFractionDigits: digits, maximumFractionDigits: digits }).format(number);
+  } catch {
+    return `${number.toFixed(digits)} ${currency || ''}`.trim();
+  }
+}
+
+function buildDaySeries(byDay = [], count = 14) {
+  const amounts = new Map(byDay.map(item => [item.date, Number(item.amount || 0)]));
+  const series = [];
+  for (let offset = count - 1; offset >= 0; offset--) {
+    const date = new Date(Date.now() - offset * 86400000);
+    const key = date.toISOString().slice(0, 10);
+    series.push({ date: key, label: offset === 0 ? 'today' : String(date.getUTCDate()), amount: amounts.get(key) || 0 });
+  }
+  return series;
+}
+
+function shortModel(model) {
+  return String(model || 'unknown').replace(/^openai\//, '');
+}
+
+function fact(name, value, { note = '', tone = null } = {}) {
+  const shown = tone === null
+    ? `<strong>${escapeHTML(value)}</strong>`
+    : `<span class="status ${escapeHTML(tone)}">${escapeHTML(value)}</span>`;
+  return `<div class="fact"><span class="fact-name">${escapeHTML(name)}</span><div class="fact-value">${shown}${note ? `<small>${escapeHTML(note)}</small>` : ''}</div></div>`;
+}
+
+function nextDailyRunLabel(timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).formatToParts(new Date());
+    const hour = Number(parts.find(part => part.type === 'hour')?.value) % 24;
+    return `next run ${hour < 6 ? 'today' : 'tomorrow'} 06:00 · ${timeZone}`;
+  } catch {
+    return 'next run 06:00 daily';
+  }
+}
+
+function countdown(value) {
+  const ms = new Date(value) - Date.now();
+  if (!Number.isFinite(ms)) return '';
+  if (ms <= 0) return 'due now';
+  const hours = Math.round(ms / 3600000);
+  if (hours < 48) return `in ${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} day${days === 1 ? '' : 's'}`;
+}
+
+function renderAutomationCard(state) {
+  const container = $('#automation-summary');
+  if (!container) return;
+  const settings = state.settings || {};
+  const system = state.system || {};
+  const readiness = state.readiness || {};
+  const strategy = state.channelStrategy;
+  const timeZone = settings.channel_timezone || 'UTC';
+  const dailyOn = String(settings.daily_content_enabled ?? 'true') !== 'false';
+  const readinessStatus = readiness.status || 'unverified';
+  container.innerHTML = [
+    fact('Daily generation', dailyOn ? 'On' : 'Off', {
+      tone: dailyOn ? 'scheduled' : 'warning',
+      note: system.automationPaused ? 'paused with automation' : dailyOn ? nextDailyRunLabel(timeZone) : 'generate manually or through the operator'
+    }),
+    fact('Automation', system.automationPaused ? 'Paused' : 'Running', {
+      tone: system.automationPaused ? 'failed' : 'running',
+      note: system.automationPaused ? 'publish queue and analytics are stopped' : `publish queue every 15 min · up to ${Number(settings.max_daily_posts || 1)} post${Number(settings.max_daily_posts || 1) === 1 ? '' : 's'} a day`
+    }),
+    fact('Operator strategy', strategy?.status === 'active' ? 'Active' : strategy ? label(strategy.status) : 'Not configured', {
+      tone: strategy?.status === 'active' ? 'running' : 'unverified',
+      note: strategy ? `${Number(strategy.cadence_per_week || strategy.cadencePerWeek || 0)} video${Number(strategy.cadence_per_week || strategy.cadencePerWeek || 0) === 1 ? '' : 's'} a week` : 'only the simple daily flow runs'
+    }),
+    fact('Readiness', label(readinessStatus), {
+      tone: readinessStatus,
+      note: readiness.completed_at ? `checked ${timeAgo(readiness.completed_at)}${readiness.stale ? ' · stale' : ''}` : 'never run'
+    })
+  ].join('');
+}
+
+function renderNextUpload(state) {
+  const container = $('#next-upload');
+  const title = $('#next-upload-title');
+  if (!container || !title) return;
+  const scheduled = (state.schedule || [])
+    .filter(item => item.status === 'scheduled')
+    .sort((a, b) => new Date(a.publish_time || a.publishTime) - new Date(b.publish_time || b.publishTime));
+  const next = scheduled[0];
+  if (!next) {
+    title.textContent = 'Nothing scheduled';
+    container.innerHTML = empty('Approve a production to put it on the calendar.');
+    return;
+  }
+  const publishTime = next.publish_time || next.publishTime;
+  const privacy = next.metadata?.privacyStatus || 'public';
+  const channel = (state.readiness?.checks || []).find(check => check.id === 'youtube_access')?.details?.channelTitle;
+  title.textContent = next.title;
+  container.innerHTML = [
+    fact('Publishes', formatDate(publishTime), { note: countdown(publishTime) }),
+    fact('Privacy', label(privacy), { tone: privacy === 'public' ? 'warning' : 'scheduled', note: privacy === 'public' ? 'visible to everyone the moment it uploads' : 'only you can see it after upload' }),
+    fact('Channel', channel || 'Not verified', { note: channel ? 'from the last readiness check' : 'run a readiness check to confirm access' }),
+    fact('Queue', `${scheduled.length} scheduled`, { note: 'uploads happen at publish time' })
+  ].join('');
+}
+
+function renderCostEfficiency(efficiency) {
+  const container = $('#cost-efficiency');
+  if (!container) return;
+  if (!efficiency || (!efficiency.publishedVideos && !efficiency.measuredVideos)) {
+    container.innerHTML = empty('Appears once a costed video is published and its first analytics snapshot arrives.');
+    return;
+  }
+  const currency = 'USD';
+  const money = value => value === null || value === undefined ? '—' : formatMoney(value, currency);
+  const views = Number(efficiency.totalViews || 0);
+  const facts = [
+    fact('Per published video', money(efficiency.costPerPublishedVideo), {
+      note: `${Number(efficiency.publishedVideos || 0)} published with cost data`
+    }),
+    fact('Per 1k views', money(efficiency.costPer1kViews), {
+      note: efficiency.measuredVideos ? `${views.toLocaleString()} views across ${efficiency.measuredVideos} measured video${efficiency.measuredVideos === 1 ? '' : 's'}` : 'no analytics snapshot yet'
+    }),
+    fact('Per subscriber', money(efficiency.costPerSubscriber), {
+      note: efficiency.totalSubscribers === null ? 'subscriber data unavailable' : `${Number(efficiency.totalSubscribers).toLocaleString()} net subscribers`
+    })
+  ];
+  const videos = (efficiency.videos || []).slice(0, 3);
+  container.innerHTML = facts.join('') + (videos.length ? `
+    <div class="fact-subhead">Most efficient videos</div>
+    ${videos.map(video => `
+    <div class="spend-row plain">
+      <span>${escapeHTML(video.title)}<small>${money(video.cost)} · ${Number(video.views || 0).toLocaleString()} views</small></span>
+      <strong>${video.costPer1kViews === null ? '—' : `${escapeHTML(money(video.costPer1kViews))}/1k`}</strong>
+    </div>`).join('')}` : '');
+}
+
+// Cost recorded by the provider usage ledger (see utils/usage-ledger.js).
+function renderSpend(usage) {
+  const body = $('#spend-body');
+  if (!body) return;
+  const currency = usage?.currency || 'USD';
+  const month = usage?.monthToDate || {};
+  const today = usage?.today || {};
+  const range = usage?.window || {};
+  $('#stat-spend').textContent = usage ? formatMoney(month.amount || 0, currency) : '—';
+  $('#stat-spend-note').textContent = usage
+    ? `${formatMoney(today.amount || 0, currency)} today · ${Number(month.calls || 0)} call${Number(month.calls || 0) === 1 ? '' : 's'} this month`
+    : 'cost tracking unavailable';
+  $('#spend-pricing').textContent = usage
+    ? `List prices ${usage.pricingVersion || '—'} · chat & images exact, narration estimated`
+    : '';
+  if (!usage || !Number(range.calls || 0)) {
+    body.innerHTML = empty('No priced calls recorded yet. From the next generation on, every OpenAI request is priced from its usage object and shown here.');
+    return;
+  }
+
+  const productions = (usage.byProduction || []).filter(item => item.productionId);
+  const perVideo = productions.length
+    ? productions.reduce((sum, item) => sum + Number(item.amount || 0), 0) / productions.length
+    : null;
+  const figures = [
+    ['Month to date', month.amount, `${Number(month.calls || 0)} calls`],
+    ['Today', today.amount, `${Number(today.calls || 0)} calls`],
+    [`Last ${usage.windowDays || 30} days`, range.amount, `${Number(range.calls || 0)} calls`],
+    ['Per video', perVideo, productions.length ? `${productions.length} video${productions.length === 1 ? '' : 's'} costed` : 'no costed videos yet']
+  ];
+  const models = (range.byModel || []).slice(0, 6);
+  const maxModel = Math.max(...models.map(item => Number(item.amount || 0)), 0.000001);
+  const days = buildDaySeries(usage.byDay || [], 14);
+  const maxDay = Math.max(...days.map(item => item.amount), 0.000001);
+  const unpriced = Number(range.unpricedCalls || 0);
+
+  body.innerHTML = `
+    <div class="spend-figures">${figures.map(([name, value, note]) => `
+      <div><span>${escapeHTML(name)}</span><strong>${escapeHTML(formatMoney(value, currency))}</strong><small>${escapeHTML(note)}</small></div>`).join('')}
+    </div>
+    <section class="spend-section">
+      <h3>By model · last ${Number(usage.windowDays || 30)} days</h3>
+      ${models.map(item => `
+      <div class="spend-row">
+        <span>${escapeHTML(shortModel(item.model))}<small>${escapeHTML(item.endpoint || '')} · ${Number(item.calls || 0)} call${Number(item.calls || 0) === 1 ? '' : 's'}</small></span>
+        <div class="spend-bar"><i style="width:${Math.max(3, Math.round(Number(item.amount || 0) / maxModel * 100))}%"></i></div>
+        <strong>${escapeHTML(formatMoney(item.amount, currency))}</strong>
+      </div>`).join('')}
+    </section>
+    <section class="spend-section">
+      <h3>Last 14 days</h3>
+      <div class="spend-days" role="img" aria-label="Daily OpenAI spend for the last 14 days">${days.map(item => `
+        <div class="spend-day" title="${escapeHTML(item.date)} · ${escapeHTML(formatMoney(item.amount, currency))}"><i style="height:${item.amount > 0 ? Math.max(6, Math.round(item.amount / maxDay * 100)) : 2}%"></i><span>${escapeHTML(item.label)}</span></div>`).join('')}
+      </div>
+    </section>
+    <section class="spend-section">
+      <h3>Most expensive videos</h3>
+      ${productions.length ? productions.slice(0, 5).map(item => `
+      <div class="spend-row plain">
+        <span>${escapeHTML(item.title || item.productionId)}<small>${Number(item.calls || 0)} call${Number(item.calls || 0) === 1 ? '' : 's'}${item.unpricedCalls ? ` · ${Number(item.unpricedCalls)} unpriced` : ''}</small></span>
+        <strong>${escapeHTML(formatMoney(item.amount, currency))}</strong>
+      </div>`).join('') : empty('Costed videos appear once the next generation completes.')}
+    </section>
+    ${unpriced ? `<p class="callout spend-callout">${unpriced} call${unpriced === 1 ? '' : 's'} could not be priced — the model is missing from the pricing table (utils/openai-pricing.json, or your config/openai-pricing.json override), so the real total is higher than shown.</p>` : ''}`;
 }
 
 function renderActivation(activation = {}) {
