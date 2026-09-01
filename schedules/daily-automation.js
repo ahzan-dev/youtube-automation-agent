@@ -110,6 +110,14 @@ class DailyAutomation {
   async runDailyContentGeneration() {
     try {
       this.logger.info('Starting daily content generation...');
+
+      // Operator kill switch: keeps the publish queue running while stopping autonomous spend.
+      const dailyEnabled = this.db?.getSetting ? await this.db.getSetting('daily_content_enabled') : null;
+      if (String(dailyEnabled) === 'false') {
+        this.logger.info('Skipping content generation - daily_content_enabled is off');
+        await this.logAutomationEvent('daily_content_generation', 'skipped', { reason: 'daily_content_enabled=false' });
+        return;
+      }
       
       const timer = this.logger.startTimer('Daily Content Generation');
       

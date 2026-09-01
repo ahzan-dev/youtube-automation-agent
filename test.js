@@ -63,7 +63,8 @@ class SystemTest {
       { name: 'Reply Approval and Posting', test: () => this.testReplyApprovalAndPosting() },
       { name: 'Engagement AI Provider Wiring', test: () => this.testEngagementAIProviderWiring() },
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
-      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() }
+      { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
+      { name: 'Daily Generation Kill Switch', test: () => this.testDailyGenerationKillSwitch() }
     ];
 
     let passed = 0;
@@ -3297,6 +3298,32 @@ class SystemTest {
     const noService = new DailyAutomation({}, {}, {});
     await noService.refreshGrowthExperiments();
   }
+
+  async testDailyGenerationKillSwitch() {
+    const settings = { daily_content_enabled: 'false' };
+    const events = [];
+    let generated = 0;
+    const fakeDb = {
+      getSetting: async key => settings[key] ?? null,
+      setSetting: async (key, value) => { settings[key] = value; }
+    };
+    const scheduler = new DailyAutomation({}, fakeDb, {
+      generateContent: async () => { generated++; return { id: 'job_test' }; }
+    });
+    scheduler.logAutomationEvent = async (type, status, data) => events.push({ type, status, data });
+    scheduler.shouldGenerateContentToday = async () => true;
+
+    await scheduler.runDailyContentGeneration();
+    if (generated !== 0) throw new Error('daily_content_enabled=false must stop the 06:00 generation');
+    if (!events.some(event => event.type === 'daily_content_generation' && event.status === 'skipped')) {
+      throw new Error('The skipped generation must be recorded as an automation event');
+    }
+
+    settings.daily_content_enabled = 'true';
+    await scheduler.runDailyContentGeneration();
+    if (generated !== 1) throw new Error('daily_content_enabled=true must allow the 06:00 generation');
+  }
+
 }
 
 // Run tests if called directly
