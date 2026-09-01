@@ -891,7 +891,7 @@ class Database {
     if (!row) return null;
 
     const schedule = await this.getRow(
-      'SELECT * FROM publish_schedule WHERE production_id = ? ORDER BY created_at DESC LIMIT 1',
+      "SELECT * FROM publish_schedule WHERE production_id = ? AND status != 'cancelled' ORDER BY created_at DESC LIMIT 1",
       [productionId]
     );
     const provenance = await this.getContentProvenance(productionId);

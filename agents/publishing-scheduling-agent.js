@@ -648,6 +648,37 @@ class PublishingSchedulingAgent {
     }
   }
 
+  /**
+   * Take a production out of the publish queue for good. The entry is kept
+   * (status "cancelled") as a record; the production can be edited and
+   * approved again, which creates a fresh entry.
+   */
+  async cancelScheduledContent(contentId, reason = 'Unscheduled by operator') {
+    let entry = this.publishQueue.find(e => e.productionId === contentId || e.id === contentId);
+    if (!entry) entry = await this.db.getLatestScheduleEntry?.(contentId);
+    if (!entry) {
+      const error = new Error(`No schedule entry found for ${contentId}`);
+      error.status = 404;
+      throw error;
+    }
+    if (entry.status === 'published') {
+      const error = new Error('This content is already published on YouTube; unpublish it there instead');
+      error.status = 409;
+      throw error;
+    }
+    if (entry.status === 'uploading' || entry.status === 'reconciliation_required') {
+      const error = new Error(`Cannot unschedule while the entry is ${entry.status}; reconcile the upload first`);
+      error.status = 409;
+      throw error;
+    }
+    entry.status = 'cancelled';
+    entry.error = reason;
+    await this.db.updateScheduleEntry(entry);
+    this.publishQueue = this.publishQueue.filter(e => e.id !== entry.id && e.productionId !== entry.productionId);
+    this.logger.info(`Unscheduled: ${entry.title || entry.productionId} (${reason})`);
+    return entry;
+  }
+
   async pauseScheduledContent(contentId) {
     const entry = this.publishQueue.find(e => 
       e.productionId === contentId || e.id === contentId

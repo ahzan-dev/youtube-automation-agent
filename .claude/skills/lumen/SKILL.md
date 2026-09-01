@@ -87,5 +87,5 @@ These act on the **live channel**, not on Lumen's drafts. Every public-facing ch
 ## What not to do
 
 - Do not run `npm start` or `npm test` against the production data directory — both open the SQLite DB and flip running jobs to `interrupted`.
-- Do not edit approved or scheduled productions' scenes (Lumen locks them); reject and regenerate instead if something is wrong.
+- Approved or scheduled productions are locked for scene repair. To change one before it uploads, `unschedule_production confirm=true` (operator decision) — it returns to `needs_review` with attestations cleared — then edit, rebuild, and have the operator approve again.
 - Do not switch `video_provider` away from `slideshow` or raise `video_max_generated_seconds` without an explicit budget decision from the operator.

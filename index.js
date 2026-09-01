@@ -802,6 +802,29 @@ class YouTubeAutomationAgent {
       }
     });
 
+    this.app.post('/api/content/:productionId/unschedule', protect, async (req, res) => {
+      try {
+        const bundle = await this.db.getProductionBundle(req.params.productionId);
+        if (!bundle) return res.status(404).json({ error: 'Content not found' });
+        if (!this.agents.publishing) return res.status(503).json({ success: false, error: 'Publishing agent is not available' });
+        const reason = String(req.body?.reason || 'Unscheduled by operator').slice(0, 500);
+        const entry = await this.agents.publishing.cancelScheduledContent(bundle.id, reason);
+        // Back to the human gate: edits are allowed again and both attestations
+        // must be given afresh before the production can be approved.
+        await this.db.saveContentReview(bundle.id, {
+          status: 'needs_review',
+          editorData: { ...(bundle.editorData || {}), factChecked: false, rightsConfirmed: false },
+          qualityChecks: bundle.qualityChecks,
+          reviewNotes: `Unscheduled: ${reason}`,
+          reviewedAt: null
+        });
+        await this.db.updateProductionStatus(bundle.id, 'ready');
+        return res.json({ success: true, result: { productionId: bundle.id, schedule: { id: entry.id, status: entry.status, publishTime: entry.publishTime }, reviewStatus: 'needs_review' } });
+      } catch (error) {
+        return res.status(error.status || 400).json({ success: false, error: error.message });
+      }
+    });
+
     this.app.post('/api/content/:productionId/reject', protect, async (req, res) => {
       const bundle = await this.db.getProductionBundle(req.params.productionId);
       if (!bundle) return res.status(404).json({ error: 'Content not found' });

@@ -355,6 +355,12 @@ export function registerTools(server, client) {
     }, annotations: destructive
   }, async ({ productionId, confirm, ...input }) => { requireConfirm(confirm, 'approve_and_schedule (leads to a YouTube upload)'); return json(await client.approve(productionId, input)); });
 
+  tool('unschedule_production', {
+    title: 'Unschedule production',
+    description: 'Remove an approved production from the publish queue before it uploads (entry kept as cancelled). The production returns to needs_review with both attestations cleared, scene repair is unlocked, and it must be approved again to upload. Requires confirm=true.',
+    inputSchema: { productionId: z.string(), reason: z.string().max(500).optional(), confirm: z.boolean() }, annotations: destructive
+  }, async ({ productionId, reason, confirm }) => { requireConfirm(confirm, 'unschedule_production (cancels a planned upload)'); return json(await client.unschedule(productionId, reason)); });
+
   tool('reject_production', { title: 'Reject production', description: 'Reject a production with notes; it will not be scheduled.', inputSchema: { productionId: z.string(), notes: z.string().max(1000).optional() }, annotations: destructive },
     async ({ productionId, notes }) => json(await client.reject(productionId, notes)));
 

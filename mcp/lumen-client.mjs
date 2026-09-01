@@ -148,6 +148,7 @@ export class LumenClient {
   production(productionId) { return this.get(`/api/content/${encodeURIComponent(productionId)}`); }
   editMetadata(productionId, editor) { return this.patch(`/api/content/${encodeURIComponent(productionId)}`, editor); }
   approve(productionId, input) { return this.post(`/api/content/${encodeURIComponent(productionId)}/approve`, input); }
+  unschedule(productionId, reason) { return this.post(`/api/content/${encodeURIComponent(productionId)}/unschedule`, reason ? { reason } : {}); }
   reject(productionId, notes) { return this.post(`/api/content/${encodeURIComponent(productionId)}/reject`, notes ? { notes } : {}); }
   retry(productionId) { return this.post(`/api/content/${encodeURIComponent(productionId)}/retry`); }
   reviewProvenance(productionId, input) { return this.put(`/api/content/${encodeURIComponent(productionId)}/provenance`, input); }
