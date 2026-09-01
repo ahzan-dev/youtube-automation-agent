@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "lumen": {
+      "command": "node",
+      "args": ["mcp/server.mjs"],
+      "env": {
+        "LUMEN_URL": "${LUMEN_URL:-http://localhost:3456}",
+        "LUMEN_API_KEY": "${LUMEN_API_KEY:-}",
+        "LUMEN_BASIC_AUTH": "${LUMEN_BASIC_AUTH:-}"
+      }
+    }
+  }
+}

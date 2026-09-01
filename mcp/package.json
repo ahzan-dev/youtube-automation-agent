@@ -1,0 +1,22 @@
+{
+  "name": "lumen-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets Claude Code operate a Lumen / AgentTube instance through its REST API",
+  "type": "module",
+  "bin": {
+    "lumen-mcp": "./server.mjs"
+  },
+  "main": "./server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check lumen-client.mjs && node --check tools.mjs"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  }
+}

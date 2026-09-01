@@ -482,6 +482,18 @@ flowchart LR
 
 Each stage has graceful fallbacks. If a paid API key isn't configured, the system simulates that step so the rest of the pipeline still runs.
 
+## Control it from Claude Code (MCP)
+
+`mcp/` contains an MCP server that exposes the whole workflow — status, generation, scene repair, provenance review, readiness and DarkzSEO audits, approval and scheduling, Shorts, strategy, experiments and audience replies — as 57 typed tools over the REST API. Approval gates and cost confirmations stay in force: tools that spend credits or lead to an upload require an explicit `confirm`, and attestations remain human decisions.
+
+```bash
+cd mcp && npm install
+export LUMEN_URL=https://your-instance LUMEN_API_KEY=… LUMEN_BASIC_AUTH=user:pass   # basic auth optional
+claude   # the repo's .mcp.json registers the "lumen" server
+```
+
+The companion skill in `.claude/skills/lumen/SKILL.md` teaches Claude Code the daily review workflow. See [mcp/README.md](mcp/README.md).
+
 ## Extending
 
 ### Custom AI provider

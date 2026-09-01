@@ -4,6 +4,7 @@ module.exports = [
   {
     ignores: [
       'node_modules/**',
+      'mcp/node_modules/**',
       'coverage/**',
       'logs/**',
       'temp/**',
@@ -58,5 +59,24 @@ module.exports = [
         caughtErrors: 'none'
       }]
     }
-  }
+  },
+  {
+    // The MCP server is an ES-module package with its own node_modules.
+    files: ['mcp/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        AbortController: 'readonly',
+        Buffer: 'readonly',
+        URL: 'readonly',
+        clearTimeout: 'readonly',
+        setTimeout: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        globalThis: 'readonly',
+        process: 'readonly'
+      }
+    }
+  },
 ];
