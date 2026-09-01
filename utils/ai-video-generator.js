@@ -5,7 +5,7 @@ const path = require('path');
 const axios = require('axios');
 const sharp = require('sharp');
 const { Logger } = require('./logger');
-const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
+const { runFFmpeg, checkFFmpeg, ffmpegInstallHint, probeDurationSeconds } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
 
 class AIVideoGenerator {
@@ -411,9 +411,25 @@ class AIVideoGenerator {
       if (segment.type === 'image') args.push('-loop', '1', '-t', Number(segment.duration).toFixed(2), '-framerate', '30', '-i', segment.path);
       else args.push('-stream_loop', '-1', '-i', segment.path);
     }
-    const filters = segments.map((segment, index) =>
-      `[${index}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p,trim=duration=${Number(segment.duration).toFixed(2)},setpts=PTS-STARTPTS[v${index}]`
-    );
+    // fit modes: 'blur' keeps the whole picture and fills the remaining frame
+    // with a blurred copy (used for generated illustrations, whose edges often
+    // carry text); 'cover' crops to fill; the default 'contain' letterboxes with
+    // black and never crops — the safe choice for uploaded or licensed footage.
+    const fitFilter = (segment, index) => {
+      const input = `[${index}:v]`;
+      const tail = `fps=30,format=yuv420p,trim=duration=${Number(segment.duration).toFixed(2)},setpts=PTS-STARTPTS[v${index}]`;
+      if (segment.fit === 'blur') {
+        return `${input}split[bg${index}][fg${index}];` +
+          `[bg${index}]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,boxblur=24:4[bgb${index}];` +
+          `[fg${index}]scale=1920:1080:force_original_aspect_ratio=decrease[fgs${index}];` +
+          `[bgb${index}][fgs${index}]overlay=(W-w)/2:(H-h)/2,${tail}`;
+      }
+      const fit = segment.fit === 'cover'
+        ? 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080'
+        : 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black';
+      return `${input}${fit},${tail}`;
+    };
+    const filters = segments.map((segment, index) => fitFilter(segment, index));
     filters.push(`${segments.map((_, index) => `[v${index}]`).join('')}concat=n=${segments.length}:v=1:a=0[vout]`);
     args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputPath);
     await runFFmpeg(args);
@@ -507,7 +523,15 @@ class AIVideoGenerator {
       }
 
       const videoPath = outputPath.replace('.mp4', '_visual.mp4');
-      const duration = this.calculateScriptDuration(script);
+      // Size the slideshow to the real narration so -shortest never truncates
+      // the voice track; fall back to the script-based estimate without audio.
+      let duration = this.calculateScriptDuration(script);
+      if (audioPath && await this.isUsableAudioFile(audioPath)) {
+        const narrationSeconds = await probeDurationSeconds(audioPath);
+        if (narrationSeconds && narrationSeconds > 0) {
+          duration = narrationSeconds + 0.5;
+        }
+      }
       await this.renderSlidesToVideo(stills, duration, videoPath);
 
       // Add audio
@@ -768,11 +792,34 @@ class AIVideoGenerator {
       ).join('');
     }
     
-    if (typeof section.content === 'string') {
-      return `<p>${section.content.slice(0, 200)}${section.content.length > 200 ? '...' : ''}</p>`;
+    const text = this.sectionText(section);
+    if (text) {
+      return `<p>${this.escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}</p>`;
     }
-    
-    return '<p>Content coming soon...</p>';
+
+    return '';
+  }
+
+  // AI-generated sections carry `content` as an array of sentences; template
+  // sections use a plain string. Normalise both to one string.
+  sectionText(section) {
+    const content = section && section.content;
+    if (typeof content === 'string') return content.trim();
+    if (Array.isArray(content)) {
+      return content.filter(part => typeof part === 'string').join(' ').trim();
+    }
+    if (content && typeof content === 'object' && typeof content.text === 'string') {
+      return content.text.trim();
+    }
+    return '';
+  }
+
+  escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   calculateScriptDuration(script) {
@@ -787,8 +834,9 @@ class AIVideoGenerator {
     
     if (script.mainContent && script.mainContent.sections) {
       script.mainContent.sections.forEach(section => {
-        if (typeof section.content === 'string') {
-          totalWords += section.content.split(' ').length;
+        const text = this.sectionText(section);
+        if (text) {
+          totalWords += text.split(/\s+/).length;
         }
         if (section.items) {
           section.items.forEach(item => {

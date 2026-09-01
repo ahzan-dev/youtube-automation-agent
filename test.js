@@ -2243,11 +2243,19 @@ class SystemTest {
 
       const result = await service.generateText('test prompt', { maxTokens: 512 });
       if (result !== '{"ok":true}') throw new Error('generateText did not return the model content');
-      if (calls[0].max_completion_tokens !== 512) {
+      // Reasoning models spend part of max_completion_tokens on hidden reasoning,
+      // so the budget must be at least the requested visible size (with headroom).
+      if (!(calls[0].max_completion_tokens >= 512)) {
         throw new Error('Modern models must receive max_completion_tokens, not max_tokens');
       }
       if (calls[0].max_tokens !== undefined) {
         throw new Error('Legacy max_tokens must not be sent to modern models');
+      }
+      if (calls[0].temperature !== undefined) {
+        throw new Error('Reasoning models must not receive a temperature parameter');
+      }
+      if (calls[0].reasoning_effort !== 'low') {
+        throw new Error('Reasoning models must be asked for low reasoning effort');
       }
 
       // Legacy models reject max_completion_tokens with a 400 — the service must

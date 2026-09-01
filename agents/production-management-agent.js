@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const { Logger } = require('../utils/logger');
 const { AIVideoGenerator } = require('../utils/ai-video-generator');
 const { SceneRepairService } = require('../utils/scene-repair-service');
+const { probeDurationSeconds } = require('../utils/ffmpeg');
 
 class ProductionManagementAgent {
   constructor(db, credentials) {
@@ -429,9 +430,16 @@ class ProductionManagementAgent {
       const evidence = this.aiVideoGenerator.lastNarrationResult || {};
       const usable = await this.aiVideoGenerator.isUsableAudioFile(generatedPath);
 
+      // The real narration length drives the video length, the scene manifest
+      // and the captions; the script-based estimate is only a fallback.
+      const narrationSeconds = usable ? await probeDurationSeconds(generatedPath) : null;
+      if (narrationSeconds && narrationSeconds > 0) {
+        productionData.estimatedDuration = this.formatDuration(narrationSeconds);
+      }
+
       productionData.assets.audio = {
         path: generatedPath,
-        duration: productionData.estimatedDuration,
+        duration: narrationSeconds && narrationSeconds > 0 ? Number(narrationSeconds.toFixed(2)) : productionData.estimatedDuration,
         format: 'mp3',
         generatedWith: 'AI',
         quality: usable ? 'high' : null,
@@ -452,6 +460,13 @@ class ProductionManagementAgent {
       this.logger.error('AI audio generation failed:', error);
       return await this.simulateAudioGeneration(productionData, error);
     }
+  }
+
+  formatDuration(totalSeconds) {
+    const whole = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    const minutes = Math.floor(whole / 60);
+    const seconds = whole % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
   }
 
   async generateCaptions(productionData) {

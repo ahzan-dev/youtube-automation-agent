@@ -46,6 +46,12 @@ const PROVIDERS = {
   },
 };
 
+// gpt-5.x and o-series models reason before answering; see generateText().
+const REASONING_HEADROOM_TOKENS = 6000;
+function isReasoningModel(model) {
+  return /^(gpt-5|o[1-9])/i.test(String(model || ''));
+}
+
 class AITextService {
   constructor(credentials = {}) {
     this.logger = new Logger('AITextService');
@@ -64,6 +70,12 @@ class AITextService {
 
     if (provider && PROVIDERS[provider] && apiKey) {
       return this._initOpenAICompatible(PROVIDERS[provider], apiKey, model);
+    }
+
+    // The setup walkthrough stores the OpenAI key as credentials.openai (it is
+    // shared with image generation and TTS), not under aiProvider.
+    if (credentials.openai?.apiKey) {
+      return this._initOpenAICompatible(PROVIDERS.openai, credentials.openai.apiKey, credentials.openai.model);
     }
 
     for (const [, preset] of Object.entries(PROVIDERS)) {
@@ -129,33 +141,58 @@ class AITextService {
     const params = {
       model,
       messages: [{ role: 'user', content: prompt }],
-      temperature,
     };
-
-    try {
-      // Newer OpenAI models (gpt-5.x and later) reject the legacy max_tokens
-      // parameter with a 400 error and require max_completion_tokens instead.
-      const response = await this.client.chat.completions.create({
-        ...params,
-        max_completion_tokens: maxTokens,
-      });
-      return this._extractContent(response);
-    } catch (error) {
-      // Older models and some providers reject max_completion_tokens with a 400;
-      // retry the same request using the legacy max_tokens spelling.
-      if (
-        error &&
-        error.status === 400 &&
-        /max(_completion)?_tokens/i.test(error.message || '')
-      ) {
-        const response = await this.client.chat.completions.create({
-          ...params,
-          max_tokens: maxTokens,
-        });
-        return this._extractContent(response);
-      }
-      throw error;
+    let completionBudget = maxTokens;
+    if (isReasoningModel(model)) {
+      // Reasoning models (gpt-5.x, o-series) accept only the default temperature,
+      // and max_completion_tokens also covers their hidden reasoning tokens. A
+      // budget sized for the visible answer alone gets consumed by reasoning and
+      // the reply comes back empty. Keep reasoning short and leave headroom.
+      params.reasoning_effort = 'low';
+      completionBudget = maxTokens + REASONING_HEADROOM_TOKENS;
+    } else {
+      params.temperature = temperature;
     }
+
+    // Newer OpenAI models (gpt-5.x and later) reject the legacy max_tokens
+    // parameter and require max_completion_tokens; older models and some
+    // providers do the opposite. Try the modern spelling first.
+    const attempts = [
+      { ...params, max_completion_tokens: completionBudget },
+      { ...params, max_tokens: completionBudget },
+    ];
+
+    let lastError;
+    for (let request of attempts) {
+      try {
+        return this._extractContent(await this.client.chat.completions.create(request));
+      } catch (error) {
+        lastError = error;
+        if (!error || error.status !== 400) throw error;
+        const message = error.message || '';
+        // Some OpenAI-compatible providers do not know reasoning_effort.
+        if (/reasoning_effort/i.test(message) && 'reasoning_effort' in request) {
+          const { reasoning_effort: _omitEffort, ...withoutEffort } = request;
+          return this._extractContent(await this.client.chat.completions.create(withoutEffort));
+        }
+        // Reasoning models (gpt-5.x family) only accept the default temperature
+        // and return 400 for anything else. Retry the same request without it.
+        if (/temperature/i.test(message) && 'temperature' in request) {
+          const { temperature: _omit, ...withoutTemperature } = request;
+          try {
+            return this._extractContent(await this.client.chat.completions.create(withoutTemperature));
+          } catch (retryError) {
+            lastError = retryError;
+            if (!retryError || retryError.status !== 400) throw retryError;
+            if (!/max(_completion)?_tokens/i.test(retryError.message || '')) throw retryError;
+            // fall through to the next max_tokens spelling
+            continue;
+          }
+        }
+        if (!/max(_completion)?_tokens/i.test(message)) throw error;
+      }
+    }
+    throw lastError;
   }
 
   _extractContent(response) {
@@ -168,6 +205,12 @@ class AITextService {
         : null;
 
     if (typeof content !== 'string' || !content.trim()) {
+      const finishReason = response?.choices?.[0]?.finish_reason;
+      if (finishReason === 'length') {
+        throw new Error(
+          `${this.providerName} hit the completion token limit before producing any text (reasoning tokens consumed the budget). Increase maxTokens or use a lower reasoning effort.`
+        );
+      }
       // A null/empty body used to surface as cryptic "Unexpected end of JSON input"
       // in the agents' JSON parsers. Report the real cause instead.
       throw new Error(

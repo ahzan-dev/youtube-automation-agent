@@ -1360,7 +1360,7 @@ class YouTubeAutomationAgent {
       await this.db.updateGenerationJob(jobId, { status: 'running', progress: 2, error: null, completedAt: null });
       const result = await this.generateContent(input.topic, input.style, input.length, {
         jobId,
-        strategyContext: input.strategyContext
+        strategyContext: input.strategyContext || {}
       });
       await this.db.updateGenerationJob(jobId, {
         status: 'completed',
@@ -1408,7 +1408,10 @@ class YouTubeAutomationAgent {
 
   async generateContent(topic = null, style = null, length = 'medium', options = {}) {
     this.logger.info('Starting content generation pipeline...');
-    const { jobId = null, strategyContext = {} } = options;
+    const jobId = options.jobId || null;
+    // Manual /generate requests normalise a missing context to null, which a
+    // destructuring default would not catch.
+    const strategyContext = options.strategyContext || {};
     const profile = await this.db.getChannelProfile() || {};
     const lengthLabels = { short: '2-4 minutes', medium: '8-12 minutes', long: '15-20 minutes' };
 

@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
 const sharp = require('sharp');
-const { runFFmpeg } = require('./ffmpeg');
+const { runFFmpeg, probeDurationSeconds } = require('./ffmpeg');
 const { ProvenanceService } = require('./provenance-service');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4']);
@@ -155,10 +155,14 @@ class SceneRepairService {
     }
     const directory = path.join(this.dataRoot, 'audio', 'scenes', production.id);
     await fs.mkdir(directory, { recursive: true });
+    const narrationSeconds = await probeDurationSeconds(audioPath);
     let start = 0;
     for (const scene of scenes) {
       const output = path.join(directory, `${String(scene.position).padStart(3, '0')}_r1.mp3`);
       try {
+        if (narrationSeconds && start >= narrationSeconds - 0.05) {
+          throw new Error(`scene starts at ${start.toFixed(1)}s but the narration is only ${narrationSeconds.toFixed(1)}s long; align scene durations with the narration`);
+        }
         await runFFmpeg(['-y', '-ss', start.toFixed(2), '-t', Number(scene.duration).toFixed(2), '-i', audioPath, '-vn', '-c:a', 'libmp3lame', output]);
         scene.audioPath = output;
         scene.narrationStatus = 'current';
@@ -177,6 +181,29 @@ class SceneRepairService {
       start += Number(scene.duration);
     }
     return scenes;
+  }
+
+  // Segments cut from the full production narration are always revision 1
+  // (`NNN_r1.mp3`); per-scene TTS regeneration writes `_r2` and later.
+  isNarrationSlice(scene) {
+    return Boolean(scene?.audioPath) && /^\d{3}_r1\.mp3$/.test(path.basename(scene.audioPath));
+  }
+
+  // Re-cut every slice-derived segment from the full narration using the
+  // current scene durations. Scenes with regenerated narration are kept.
+  async resliceNarrationSegments(bundle) {
+    const audioPath = bundle.assets?.audio?.path;
+    if (!await this.videoGenerator?.isUsableAudioFile?.(audioPath)) return [];
+    const scenes = (await this.db.listProductionScenes(bundle.id)).sort((a, b) => a.position - b.position);
+    if (scenes.some(scene => scene.audioPath && !this.isNarrationSlice(scene))) return scenes;
+    const working = scenes.map(scene => ({ ...scene }));
+    await this.initializeAudioSegments(bundle, working);
+    for (const scene of working) {
+      await this.db.updateProductionScene(bundle.id, scene.id, {
+        audioPath: scene.audioPath, narrationStatus: scene.narrationStatus, narrationError: scene.narrationError
+      });
+    }
+    return working;
   }
 
   async getEditableBundle(productionId) {
@@ -219,6 +246,10 @@ class SceneRepairService {
 
     if (scriptChanged && input.factualChange !== false) {
       await this.markSceneClaimForReview(bundle, next, verifiedSourceIds);
+    }
+    if (durationChanged) {
+      // Scene boundaries moved, so segments cut from the full narration are stale.
+      await this.resliceNarrationSegments(bundle);
     }
     await this.db.saveProductionSceneRevision({
       productionId, sceneId, action: 'edit', before: scene, after: next,
@@ -543,7 +574,8 @@ class SceneRepairService {
     await fs.mkdir(path.dirname(finalPath), { recursive: true });
     await fs.mkdir(path.dirname(captionsPath), { recursive: true });
     await this.videoGenerator.renderMediaTimeline(scenes.map(scene => ({
-      type: scene.assetType, path: scene.assetPath, duration: scene.duration
+      type: scene.assetType, path: scene.assetPath, duration: scene.duration,
+      fit: scene.assetType === 'image' && scene.assetOrigin === 'generated' ? 'blur' : 'contain'
     })), visualPath);
 
     const audioPath = await this.rebuildNarration(productionId, scenes, bundle.assets?.audio?.path, timestamp);
@@ -598,6 +630,10 @@ class SceneRepairService {
     const hasSceneAudio = scenes.some(scene => scene.audioPath && scene.narrationStatus === 'current');
     const allCurrentWithoutSegments = scenes.every(scene => scene.narrationStatus === 'current' && !scene.audioPath);
     if (!hasSceneAudio && allCurrentWithoutSegments) return fallbackAudioPath;
+    // When no scene was individually re-narrated, every segment is a cut of the
+    // full narration: use that file as-is instead of re-encoding the pieces.
+    const onlySlices = scenes.every(scene => scene.narrationStatus === 'current' && (!scene.audioPath || this.isNarrationSlice(scene)));
+    if (onlySlices && await this.videoGenerator.isUsableAudioFile(fallbackAudioPath)) return fallbackAudioPath;
     const outputPath = path.join(this.dataRoot, 'audio', `${productionId}_scene_mix_${timestamp}.m4a`);
     const args = ['-y'];
     for (const scene of scenes) {
