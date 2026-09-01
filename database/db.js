@@ -1812,8 +1812,9 @@ class Database {
   }
 
   async getLatestScheduleEntry(productionId) {
+    // Cancelled entries are history only: a re-approval must create a fresh one.
     const row = await this.getRow(
-      'SELECT * FROM publish_schedule WHERE production_id = ? ORDER BY created_at DESC LIMIT 1',
+      "SELECT * FROM publish_schedule WHERE production_id = ? AND status != 'cancelled' ORDER BY created_at DESC LIMIT 1",
       [productionId]
     );
     return row ? this.deserializeScheduleEntry(row) : null;
