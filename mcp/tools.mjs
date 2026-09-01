@@ -416,7 +416,7 @@ export function registerTools(server, client) {
 
   tool('update_settings', {
     title: 'Update settings',
-    description: 'Runtime settings: video_provider (slideshow|seedance|minimax_h3|google_omni|kling|wan), video_generation_mode (auto|hybrid), video_clip_duration, video_max_generated_seconds, approval_required, max_daily_posts, content_buffer_days, channel_timezone, notification_enabled. Switching to a paid video provider is a spend decision — requires confirm=true.',
+    description: 'Runtime settings: video_provider (slideshow|seedance|minimax_h3|google_omni|kling|wan), video_generation_mode (auto|hybrid), video_clip_duration, video_max_generated_seconds, approval_required, daily_content_enabled (false stops the 06:00 generation but keeps the publish queue running), max_daily_posts, content_buffer_days, channel_timezone, notification_enabled. Switching to a paid video provider is a spend decision — requires confirm=true.',
     inputSchema: { settings: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])), confirm: z.boolean().optional() }, annotations: mutating
   }, async ({ settings, confirm }) => {
     if (settings.video_provider && settings.video_provider !== 'slideshow') requireConfirm(confirm, 'switching to a paid video provider');

@@ -40,7 +40,7 @@ node mcp/server.mjs         # stdio transport; logs go to stderr
 
 ## Tools
 
-57 tools in eight groups. Read tools are annotated read-only; anything that spends provider credits or leads to a YouTube upload requires `confirm: true` and says so in its description.
+87 tools in nine groups. Read tools are annotated read-only; anything that spends provider credits or leads to a YouTube upload requires `confirm: true` and says so in its description.
 
 - **Status**: `get_status`, `get_dashboard_section`, `get_schedule`, `get_analytics`, `get_outcomes`, `mark_notification_read`
 - **Generation**: `generate_video`, `get_job`, `wait_for_job`, `resume_job`, `cancel_job`, `create_idea`, `update_idea`, `generate_from_idea`
@@ -49,6 +49,7 @@ node mcp/server.mjs         # stdio transport; logs go to stderr
 - **Scene repair**: `edit_scene`, `reorder_scenes`, `estimate_scene_regeneration`, `regenerate_scene_visual`, `regenerate_scene_narration`, `set_intentional_silence`, `rebuild_video`
 - **Publishing**: `approve_and_schedule`, `reject_production`, `retry_production`, Shorts: `propose_shorts`, `update_short`, `render_short`, `approve_short`
 - **Channel operations**: `update_profile`, `save_strategy`, `start_operator`, `pause_operator`, `resume_operator_run`, `cancel_operator_run`, `review_learning`, `set_automation`, `update_settings`
+- **YouTube channel (direct API)**: `youtube_get_channel`, `youtube_update_channel`, `youtube_set_banner`, `youtube_set_watermark`, `youtube_remove_watermark`, sections (`youtube_list_sections`, `youtube_create_section`, `youtube_delete_section`), videos (`youtube_list_videos`, `youtube_get_video`, `youtube_update_video`, `youtube_set_thumbnail`, `youtube_delete_video`, `youtube_list_categories`), captions (`youtube_list_captions`, `youtube_upload_captions`, `youtube_delete_caption`), playlists (`youtube_list_playlists`, `youtube_create_playlist`, `youtube_update_playlist`, `youtube_delete_playlist`, `youtube_list_playlist_items`, `youtube_add_to_playlist`, `youtube_remove_playlist_item`), comments (`youtube_list_comments`, `youtube_reply_to_comment`, `youtube_post_comment`, `youtube_moderate_comment`), `youtube_search`, `youtube_analytics`
 - **Growth & audience**: `list_experiments`, `create_experiment`, `experiment_action`, `get_retention`, `refresh_retention`, `get_engagement`, `sync_engagement`, `draft_replies`, `update_reply_draft`, `approve_reply`
 
 The companion skill in `.claude/skills/lumen/SKILL.md` teaches Claude Code the review workflow, cost model and the rule that approvals and attestations remain human decisions.
@@ -57,4 +58,5 @@ The companion skill in `.claude/skills/lumen/SKILL.md` teaches Claude Code the r
 
 - `server.mjs` — stdio entrypoint, configuration, server instructions
 - `lumen-client.mjs` — HTTP client (auth headers, envelope unwrapping, per-call timeouts, typed errors)
-- `tools.mjs` — tool registrations, input schemas, result summarisers, confirm guards
+- `tools.mjs` — Lumen tool registrations, input schemas, result summarisers, confirm guards
+- `youtube-tools.mjs` — direct YouTube channel tools (backed by Lumen's `/api/youtube` routes, which use the channel's existing OAuth grant)

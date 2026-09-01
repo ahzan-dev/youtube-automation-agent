@@ -484,7 +484,7 @@ Each stage has graceful fallbacks. If a paid API key isn't configured, the syste
 
 ## Control it from Claude Code (MCP)
 
-`mcp/` contains an MCP server that exposes the whole workflow — status, generation, scene repair, provenance review, readiness and DarkzSEO audits, approval and scheduling, Shorts, strategy, experiments and audience replies — as 57 typed tools over the REST API. Approval gates and cost confirmations stay in force: tools that spend credits or lead to an upload require an explicit `confirm`, and attestations remain human decisions.
+`mcp/` contains an MCP server that exposes the whole workflow — status, generation, scene repair, provenance review, readiness and DarkzSEO audits, approval and scheduling, Shorts, strategy, experiments and audience replies — as 87 typed tools over the REST API, plus direct YouTube channel management (branding, banner, sections, video metadata, playlists, captions, comments, search, analytics) on the channel's existing OAuth grant. Approval gates and cost confirmations stay in force: tools that spend credits or lead to an upload require an explicit `confirm`, and attestations remain human decisions.
 
 ```bash
 cd mcp && npm install

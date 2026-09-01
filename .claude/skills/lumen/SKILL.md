@@ -1,6 +1,6 @@
 ---
 name: lumen
-description: Operate the Lumen / AgentTube YouTube channel agent through the `lumen` MCP server — check status, generate videos, review scenes and narration, resolve provenance claims, run readiness and DarkzSEO audits, approve and schedule uploads, manage Shorts, strategy, experiments and audience replies. Use whenever the user mentions Lumen, AgentTube, "the channel", "the video pipeline", the dashboard at lumen.trynewways.com, a production/job id, or asks to review, fix, approve, publish or generate a YouTube video.
+description: Operate the Lumen / AgentTube YouTube channel agent through the `lumen` MCP server — check status, generate videos, review scenes and narration, resolve provenance claims, run readiness and DarkzSEO audits, approve and schedule uploads, manage Shorts, strategy, experiments and audience replies — and manage the live YouTube channel itself (branding, banner, sections, videos, playlists, captions, comments, search, analytics). Use whenever the user mentions Lumen, AgentTube, "the channel", "the video pipeline", the dashboard at lumen.trynewways.com, a production/job id, or asks to review, fix, approve, publish or generate a YouTube video, or to change anything on the YouTube channel (name, description, banner, playlists, comments, video metadata).
 ---
 
 # Operating Lumen through MCP
@@ -49,6 +49,21 @@ Lumen runs a YouTube channel end to end with an **approval-first** design: gener
 ## Engagement
 
 `sync_engagement` then `get_engagement` for themes/questions; `draft_replies` creates suggestions only; `approve_reply confirm=true` **posts publicly** — read the text back to the operator first.
+
+## Managing the YouTube channel directly (`youtube_*` tools)
+
+These act on the **live channel**, not on Lumen's drafts. Every public-facing change requires `confirm=true`; describe the visible effect first.
+
+- **Channel page**: `youtube_get_channel` → `youtube_update_channel` (name, description ≤1000 chars, keywords, country, default language, trailer), `youtube_set_banner` (local PNG/JPG, 2048×1152), `youtube_list_sections` / `youtube_create_section` / `youtube_delete_section` (home-page layout), `youtube_set_watermark`.
+  - A channel tied to a personal Google account may **not** accept a rename via API — the result's `applied.title` says whether it took; if not, the operator renames it in YouTube Studio. YouTube also rate-limits renames.
+  - Handle (`@…`), avatar, links and monetisation are Studio-only; say so instead of trying.
+- **Videos already on YouTube**: `youtube_list_videos`, `youtube_get_video`, `youtube_update_video` (title/description/tags/category/privacy/scheduled `publishAt`/embeddable/license/made-for-kids/synthetic-media disclosure), `youtube_set_thumbnail`, `youtube_upload_captions` (Lumen's SRT lives in `data/captions/` on the server — download via the production's caption asset URL first), `youtube_delete_video` (irreversible; requires the exact title echoed back).
+  - Videos Lumen has scheduled but not yet uploaded are edited in Lumen (`edit_metadata`), not here.
+- **Playlists**: `youtube_list_playlists`, `youtube_create_playlist`, `youtube_update_playlist`, `youtube_delete_playlist`, `youtube_list_playlist_items`, `youtube_add_to_playlist`, `youtube_remove_playlist_item`. Good practice after the first few uploads: one playlist per content pillar, then a `multiplePlaylists` home section.
+- **Comments (raw)**: `youtube_list_comments`, `youtube_reply_to_comment`, `youtube_post_comment`, `youtube_moderate_comment` (published / heldForReview / rejected, optional ban). Prefer Lumen's engagement flow (`draft_replies` → `approve_reply`) for replies at scale; use the raw tools for one-offs and moderation.
+- **Research**: `youtube_search` (100 quota units per call — batch questions, don't loop), `youtube_list_categories`.
+- **Analytics**: `youtube_analytics` runs arbitrary YouTube Analytics queries (`channel==MINE`). Requires the *YouTube Analytics API* to be enabled in the Google Cloud project that owns the OAuth client; if it returns `accessNotConfigured`, give the operator the console link from the error and stop.
+- Quota: 10,000 units/day shared with Lumen's uploads and comment sync. Reads cost 1, writes/uploads 50, search 100.
 
 ## Interpreting states
 

@@ -22,6 +22,8 @@ const { ProductionReadinessService } = require('./utils/production-readiness-ser
 const { GenerationRecoveryService, GENERATION_STAGES } = require('./utils/generation-recovery-service');
 const { ProvenanceService } = require('./utils/provenance-service');
 const { SceneRepairService } = require('./utils/scene-repair-service');
+const { YouTubeChannelService } = require('./utils/youtube-channel-service');
+const { registerYouTubeRoutes } = require('./utils/youtube-routes');
 const { ShortsRepurposingService } = require('./utils/shorts-repurposing-service');
 const { AudienceEngagementService } = require('./utils/audience-engagement-service');
 const { GrowthExperimentService } = require('./utils/growth-experiment-service');
@@ -564,6 +566,14 @@ class YouTubeAutomationAgent {
       } catch (error) {
         return res.status(error.status || 500).json({ success: false, error: error.message });
       }
+    });
+
+    // Direct YouTube channel management (branding, uploads, playlists, sections,
+    // watermark, comments, captions, search, analytics) on the channel's OAuth grant.
+    registerYouTubeRoutes(this.app, protect, () => {
+      if (this.setupRequired || !this.credentials?.tokens?.youtube) return null;
+      if (!this.youtubeChannel) this.youtubeChannel = new YouTubeChannelService(this.credentials, { logger: this.logger });
+      return this.youtubeChannel;
     });
 
     this.app.post('/api/jobs/:jobId/cancel', protect, async (req, res) => {
@@ -1196,7 +1206,7 @@ class YouTubeAutomationAgent {
     });
 
     this.app.put('/api/settings', protect, async (req, res) => {
-      const allowed = ['approval_required', 'notification_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days'];
+      const allowed = ['approval_required', 'notification_enabled', 'daily_content_enabled', 'channel_timezone', 'max_daily_posts', 'content_buffer_days'];
       for (const key of allowed) {
         if (req.body?.[key] !== undefined) await this.db.setSetting(key, String(req.body[key]));
       }

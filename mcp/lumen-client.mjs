@@ -92,6 +92,32 @@ export class LumenClient {
     return data;
   }
 
+  /** Send raw bytes (image, caption file) with an explicit content type. */
+  async upload(method, path, buffer, contentType, query, { timeoutMs } = {}) {
+    const url = new URL(this.baseUrl + path);
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+    }
+    const headers = this.headers(false);
+    headers['Content-Type'] = contentType;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs || this.timeoutMs);
+    let response;
+    try {
+      response = await this.fetch(url, { method, headers, body: buffer, signal: controller.signal });
+    } catch (error) {
+      clearTimeout(timer);
+      throw new LumenError(`Upload failed: ${error.name === 'AbortError' ? 'timed out' : error.message}`, { status: error.name === 'AbortError' ? 504 : 0, path });
+    }
+    clearTimeout(timer);
+    const raw = await response.text();
+    let data; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error: raw.slice(0, 400) }; }
+    if (!response.ok || data.success === false) {
+      throw new LumenError(data.error || `${response.status} ${response.statusText}`, { status: response.status, code: data.code || data.reason, details: data.details, path });
+    }
+    return 'result' in data ? data.result : data;
+  }
+
   get(path, query, options) { return this.request('GET', path, { query, ...options }); }
   post(path, body = {}, options) { return this.request('POST', path, { body, ...options }); }
   put(path, body = {}, options) { return this.request('PUT', path, { body, ...options }); }

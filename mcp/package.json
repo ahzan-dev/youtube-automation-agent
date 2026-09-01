@@ -9,7 +9,7 @@
   "main": "./server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check lumen-client.mjs && node --check tools.mjs"
+    "check": "node --check server.mjs && node --check lumen-client.mjs && node --check tools.mjs && node --check youtube-tools.mjs"
   },
   "license": "MIT",
   "engines": {

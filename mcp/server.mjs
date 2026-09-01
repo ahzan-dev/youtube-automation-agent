@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { LumenClient } from './lumen-client.mjs';
 import { registerTools } from './tools.mjs';
+import { registerYouTubeTools } from './youtube-tools.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.join(here, 'package.json'), 'utf8'));
@@ -40,12 +41,14 @@ async function main() {
         'Start with get_status. Use list_productions(reviewStatus="needs_attention"|"needs_review") to find work, get_production for detail.',
         'Tools that spend provider credits or lead to a YouTube upload require confirm=true; tell the operator the cost or consequence first.',
         'Approval, provenance decisions, media-rights and factual-review flags are human attestations: record them only when the operator has explicitly made that decision.',
+        'youtube_* tools act directly on the live YouTube channel (branding, videos, playlists, comments, captions, analytics); anything public-facing requires confirm=true.',
         settings.apiKey ? '' : 'WARNING: LUMEN_API_KEY is not set — mutating tools will fail with 401 unless the instance has no API_KEY configured.'
       ].filter(Boolean).join('\n')
     }
   );
 
   registerTools(server, client);
+  registerYouTubeTools(server, client);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
