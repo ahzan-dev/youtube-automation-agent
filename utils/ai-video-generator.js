@@ -431,7 +431,12 @@ class AIVideoGenerator {
     };
     const filters = segments.map((segment, index) => fitFilter(segment, index));
     filters.push(`${segments.map((_, index) => `[v${index}]`).join('')}concat=n=${segments.length}:v=1:a=0[vout]`);
-    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputPath);
+    // veryfast keeps a 5-minute 1080p encode to a few minutes on a small VPS
+    // with no visible loss on slide content; tune for stills only when nothing
+    // in the timeline is a real video clip.
+    const encode = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21'];
+    if (segments.every(segment => segment.type === 'image')) encode.push('-tune', 'stillimage');
+    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', ...encode, '-pix_fmt', 'yuv420p', outputPath);
     await runFFmpeg(args);
     return outputPath;
   }
@@ -558,7 +563,7 @@ class AIVideoGenerator {
     }
 
     if (stills.length === 1) {
-      args.push('-vf', 'format=yuv420p', '-c:v', 'libx264', videoPath);
+      args.push('-vf', 'format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-crf', '21', videoPath);
       await runFFmpeg(args);
       return videoPath;
     }
@@ -577,7 +582,7 @@ class AIVideoGenerator {
     args.push(
       '-filter_complex', filters.join(';'),
       '-map', '[vfinal]',
-      '-c:v', 'libx264',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-crf', '21',
       '-r', '30',
       videoPath
     );

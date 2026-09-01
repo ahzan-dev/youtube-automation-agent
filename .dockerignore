@@ -1,0 +1,16 @@
+node_modules
+.git
+.github
+data
+uploads
+logs
+config/credentials.json
+config/tokens.json
+.env
+.env.*
+!.env.example
+mise.toml
+*.log
+docs
+examples
+reports
