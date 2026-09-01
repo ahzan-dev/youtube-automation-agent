@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint, probeDurationSeconds } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
+const { ledger } = require('./usage-ledger');
 
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
@@ -145,15 +146,29 @@ class AIVideoGenerator {
   }
 
   async generateOpenAITTS(text, outputPath) {
-    const response = await this.openai.audio.speech.create({
+    const request = {
       model: "gpt-4o-mini-tts",
       voice: "coral",
       input: text,
       speed: 1.0
-    });
+    };
+    const response = await this.openai.audio.speech.create(request);
 
     const buffer = Buffer.from(await response.arrayBuffer());
     await fs.writeFile(outputPath, buffer);
+
+    // audio.speech returns no usage object: TTS is billed on generated audio, so
+    // measure the file and let the ledger estimate the cost from minutes.
+    let audioSeconds = null;
+    try {
+      audioSeconds = await probeDurationSeconds(outputPath);
+    } catch {
+      // duration is only needed for the cost estimate; the narration itself is fine
+    }
+    await ledger.record({
+      provider: 'openai', endpoint: 'audio.speech', model: request.model,
+      ...ledger.priceSpeech({ model: request.model, inputCharacters: String(text || '').length, audioSeconds })
+    });
 
     this.logger.info('OpenAI TTS generation complete');
     return outputPath;
@@ -231,12 +246,17 @@ class AIVideoGenerator {
   }
 
   async generateOpenAIImage(prompt, imagePath) {
-    const response = await this.openai.images.generate({
+    const request = {
       model: "gpt-image-2",
       prompt: prompt,
       n: 1,
       size: "1536x1024",
       quality: "high",
+    };
+    const response = await this.openai.images.generate(request);
+    await ledger.record({
+      provider: 'openai', endpoint: 'images.generate', model: request.model,
+      ...ledger.priceImage({ model: request.model, usage: response.usage, count: request.n, size: request.size, quality: request.quality })
     });
 
     if (response.data[0].b64_json) {

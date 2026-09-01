@@ -28,6 +28,7 @@ const { ShortsRepurposingService } = require('./utils/shorts-repurposing-service
 const { AudienceEngagementService } = require('./utils/audience-engagement-service');
 const { GrowthExperimentService } = require('./utils/growth-experiment-service');
 const { AITextService } = require('./utils/ai-text-service');
+const { ledger } = require('./utils/usage-ledger');
 const { DiscoverabilityService } = require('./utils/discoverability-service');
 const { version } = require('./package.json');
 const chalk = require('chalk');
@@ -65,6 +66,7 @@ class YouTubeAutomationAgent {
       this.logger.info('Initializing database...');
       this.db = new Database();
       await this.db.initialize();
+      ledger.bindStore(this.db);
       await this.db.markInterruptedJobs();
       this.recovery = new GenerationRecoveryService(this.db, {
         logger: this.logger,
@@ -476,7 +478,7 @@ class YouTubeAutomationAgent {
 
     this.app.get('/api/dashboard', async (_req, res) => {
       try {
-        const [stats, jobs, pipeline, schedule, events, notifications, profile, settings, ideas, analytics, learning, activation, channelStrategy, operatorRuns, readiness, engagement, experiments] = await Promise.all([
+        const [stats, jobs, pipeline, schedule, events, notifications, profile, settings, ideas, analytics, learning, activation, channelStrategy, operatorRuns, readiness, engagement, experiments, usage] = await Promise.all([
           this.db.getStats(),
           this.db.listGenerationJobs(20),
           this.db.getPipelineOverview(50),
@@ -511,11 +513,15 @@ class YouTubeAutomationAgent {
           this.experiments
             ? this.experiments.getSummary()
             : Promise.resolve({ experiments: [], candidates: [], activeCount: 0, awaitingDecisionCount: 0, evidencePolicy: 'Finish setup to create a controlled growth experiment.' })
+          ,
+          this.db.getUsageSummary({ days: 30 })
+            .then(summary => ({ ...summary, pricingVersion: ledger.pricingVersion }))
+            .catch(() => null)
         ]);
         if (this.telemetry) void this.telemetry.sync(activation);
         res.json({
           stats, jobs, pipeline, schedule, events, notifications, profile, settings, ideas, analytics, learning, activation,
-          channelStrategy, operatorRuns, readiness, engagement, experiments,
+          channelStrategy, operatorRuns, readiness, engagement, experiments, usage,
           system: {
             initialized: this.isInitialized,
             setupRequired: this.setupRequired,
@@ -529,6 +535,19 @@ class YouTubeAutomationAgent {
         });
       } catch (error) {
         res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Provider spend recorded from the usage object of every OpenAI response.
+    this.app.get('/api/usage', async (req, res) => {
+      try {
+        const summary = await this.db.getUsageSummary({ days: req.query.days });
+        return res.json({
+          success: true,
+          result: { ...summary, pricingVersion: ledger.pricingVersion, pricingSource: ledger.pricing?.source || null }
+        });
+      } catch (error) {
+        return res.status(500).json({ success: false, error: error.message });
       }
     });
 
@@ -593,6 +612,7 @@ class YouTubeAutomationAgent {
         await this.scenes.ensureManifest(bundle);
         bundle = await this.db.getProductionBundle(req.params.productionId);
       }
+      bundle.cost = await this.db.getProductionUsageCost(bundle.id || req.params.productionId);
       return res.json(this.decorateContentBundle(bundle));
     });
 
@@ -1391,10 +1411,11 @@ class YouTubeAutomationAgent {
   async runGenerationJob(jobId, input) {
     try {
       await this.db.updateGenerationJob(jobId, { status: 'running', progress: 2, error: null, completedAt: null });
-      const result = await this.generateContent(input.topic, input.style, input.length, {
+      const result = await ledger.runWithContext({ jobId, purpose: 'generation' }, () => this.generateContent(input.topic, input.style, input.length, {
         jobId,
         strategyContext: input.strategyContext || {}
-      });
+      }));
+      await this.db.attachUsageToProduction(jobId, result.contentId);
       await this.db.updateGenerationJob(jobId, {
         status: 'completed',
         stage: result.reviewStatus === 'approved' ? 'scheduled' : result.reviewStatus,

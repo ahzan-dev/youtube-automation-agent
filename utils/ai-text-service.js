@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const { Logger } = require('./logger');
+const { ledger } = require('./usage-ledger');
 
 const GEMINI_MODELS = [
   'gemini-3.7-flash',
@@ -97,6 +98,7 @@ class AITextService {
     this.client = new OpenAI({ apiKey, baseURL: preset.baseURL });
     this.model = model || preset.defaultModel;
     this.providerName = preset.name;
+    this.providerKey = Object.keys(PROVIDERS).find(key => PROVIDERS[key] === preset) || 'openai-compatible';
     this.logger.info(`${preset.name} initialized (model: ${this.model})`);
   }
 
@@ -106,6 +108,7 @@ class AITextService {
       this.gemini = new GoogleGenAI({ apiKey });
       this.model = model || GEMINI_DEFAULT_MODEL;
       this.providerName = 'Google Gemini';
+      this.providerKey = 'gemini';
       this.logger.info(`Gemini initialized (model: ${this.model})`);
     } catch (error) {
       this.logger.error('Failed to initialize Gemini:', error.message);
@@ -165,7 +168,7 @@ class AITextService {
     let lastError;
     for (let request of attempts) {
       try {
-        return this._extractContent(await this.client.chat.completions.create(request));
+        return this._extractContent(await this.client.chat.completions.create(request), request);
       } catch (error) {
         lastError = error;
         if (!error || error.status !== 400) throw error;
@@ -173,14 +176,14 @@ class AITextService {
         // Some OpenAI-compatible providers do not know reasoning_effort.
         if (/reasoning_effort/i.test(message) && 'reasoning_effort' in request) {
           const { reasoning_effort: _omitEffort, ...withoutEffort } = request;
-          return this._extractContent(await this.client.chat.completions.create(withoutEffort));
+          return this._extractContent(await this.client.chat.completions.create(withoutEffort), withoutEffort);
         }
         // Reasoning models (gpt-5.x family) only accept the default temperature
         // and return 400 for anything else. Retry the same request without it.
         if (/temperature/i.test(message) && 'temperature' in request) {
           const { temperature: _omit, ...withoutTemperature } = request;
           try {
-            return this._extractContent(await this.client.chat.completions.create(withoutTemperature));
+            return this._extractContent(await this.client.chat.completions.create(withoutTemperature), withoutTemperature);
           } catch (retryError) {
             lastError = retryError;
             if (!retryError || retryError.status !== 400) throw retryError;
@@ -195,7 +198,17 @@ class AITextService {
     throw lastError;
   }
 
-  _extractContent(response) {
+  // Every OpenAI response carries a `usage` object; price it and hand it to the
+  // ledger so the dashboard can show what each production actually cost.
+  _recordUsage(response, request = {}) {
+    if (!response?.usage) return;
+    const model = response.model || request.model || this.model;
+    const priced = ledger.priceChatCompletion({ model, usage: response.usage });
+    void ledger.record({ provider: this.providerKey || 'openai', endpoint: 'chat.completions', model, ...priced });
+  }
+
+  _extractContent(response, request = {}) {
+    this._recordUsage(response, request);
     const content =
       response &&
       response.choices &&

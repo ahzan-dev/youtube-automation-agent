@@ -45,6 +45,7 @@ node mcp/server.mjs         # stdio transport; logs go to stderr
 - **Status**: `get_status`, `get_dashboard_section`, `get_schedule`, `get_analytics`, `get_outcomes`, `mark_notification_read`
 - **Generation**: `generate_video`, `get_job`, `wait_for_job`, `resume_job`, `cancel_job`, `create_idea`, `update_idea`, `generate_from_idea`
 - **Readiness**: `get_readiness`, `run_readiness_check`
+- **Cost**: `get_usage` — OpenAI spend recorded from each response's usage object (per day / model / production)
 - **Review**: `list_productions`, `get_production`, `get_script`, `get_scenes`, `edit_metadata`, `review_provenance`, `run_discoverability_audit`, `review_discoverability_finding`
 - **Scene repair**: `edit_scene`, `reorder_scenes`, `estimate_scene_regeneration`, `regenerate_scene_visual`, `regenerate_scene_narration`, `set_intentional_silence`, `rebuild_video`
 - **Publishing**: `approve_and_schedule`, `unschedule_production`, `reject_production`, `retry_production`, Shorts: `propose_shorts`, `update_short`, `render_short`, `approve_short`

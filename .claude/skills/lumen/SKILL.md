@@ -28,6 +28,7 @@ Lumen runs a YouTube channel end to end with an **approval-first** design: gener
    - specific numbers, studies, quotes, health/finance/legal → suggest adding a source URL (`sources: [{url, status:"verified"}]`) and marking `supported`, or rewriting the scene to remove the claim.
    Only call `review_provenance` after the operator chooses.
 6. **Readiness** — if `get_readiness` is older than 24 h or failing, `run_readiness_check` (free without paid probes).
+   **Cost** — `get_usage` (or `get_status.usage`) shows what OpenAI calls have cost, priced from each response's `usage` object; `get_production.cost` is the per-video figure. Chat/image amounts are exact token counts × list price (`utils/openai-pricing.json`, overridable via `config/openai-pricing.json`); TTS is estimated from audio minutes. It reflects what Lumen recorded, not the invoice.
 7. **Discoverability** — `run_discoverability_audit` is free and advisory. Dismiss noise with `review_discoverability_finding status="dismissed" reason=…` when the operator agrees; a common one is "brand missing from title".
 8. **Approve** — confirm with the operator: publish time (ISO 8601, channel timezone is Asia/Colombo), privacy (recommend `private` for the first upload of a new format), and both attestations. Then `approve_and_schedule … factChecked=true rightsConfirmed=true confirm=true`. The publish queue runs every 15 minutes and uploads at the publish time.
 9. Report: what changed, what was approved, when it uploads, what it cost.

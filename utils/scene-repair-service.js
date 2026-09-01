@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { ledger } = require('./usage-ledger');
 const fs = require('fs').promises;
 const path = require('path');
 const sharp = require('sharp');
@@ -291,6 +292,10 @@ class SceneRepairService {
   }
 
   async regenerateNarration(productionId, sceneId, input = {}) {
+    return ledger.runWithContext({ productionId, sceneId, purpose: 'scene_repair' }, () => this._regenerateNarration(productionId, sceneId, input));
+  }
+
+  async _regenerateNarration(productionId, sceneId, input = {}) {
     const bundle = await this.getEditableBundle(productionId);
     const scene = bundle.scenes.find(item => item.id === sceneId);
     if (!scene) throw this.error('Scene not found', 404);
@@ -426,6 +431,10 @@ class SceneRepairService {
   }
 
   async regenerate(productionId, sceneId, input = {}) {
+    return ledger.runWithContext({ productionId, sceneId, purpose: 'scene_repair' }, () => this._regenerate(productionId, sceneId, input));
+  }
+
+  async _regenerate(productionId, sceneId, input = {}) {
     const bundle = await this.getEditableBundle(productionId);
     const scene = bundle.scenes.find(item => item.id === sceneId);
     if (!scene) throw this.error('Scene not found', 404);

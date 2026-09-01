@@ -101,6 +101,10 @@ export function summarizeProduction(bundle) {
       needingAttention: scenes.filter(s => s.status !== 'ready' || !['current', 'intentional_silence'].includes(s.narrationStatus)).map(s => ({ id: s.id, label: s.label, status: s.status, narrationStatus: s.narrationStatus })) },
     shorts: (bundle.shorts || []).map(c => ({ id: c.id, status: c.status, title: c.title, layout: c.layout, duration: c.duration })),
     strategy: bundle.strategy ? { topic: bundle.strategy.topic, angle: bundle.strategy.angle, contentType: bundle.strategy.contentType, targetAudience: bundle.strategy.targetAudience } : null,
+    cost: bundle.cost ? {
+      amount: bundle.cost.amount, currency: bundle.cost.currency, calls: bundle.cost.calls,
+      complete: bundle.cost.complete, exact: bundle.cost.exact, unpricedCalls: bundle.cost.unpricedCalls
+    } : undefined,
     createdAt: bundle.created_at ?? bundle.createdAt
   };
 }
@@ -113,6 +117,12 @@ function summarizeDashboard(d) {
     byStatus[key] = (byStatus[key] || 0) + 1;
   }
   return {
+    usage: d.usage ? {
+      currency: d.usage.currency, pricingVersion: d.usage.pricingVersion,
+      today: d.usage.today?.amount ?? null, monthToDate: d.usage.monthToDate?.amount ?? null,
+      last30Days: d.usage.window?.amount ?? null, allTime: d.usage.allTime?.amount ?? null,
+      unpricedCalls: d.usage.window?.unpricedCalls ?? 0
+    } : undefined,
     uptimeSeconds: d.uptime, agents: d.agents, autonomousRunning: d.autonomousRunning,
     stats: d.stats,
     automationPaused: d.settings?.automation_paused === 'true',
@@ -222,6 +232,12 @@ export function registerTools(server, client) {
   // ------------------------------------------------------------ readiness
   tool('get_readiness', { title: 'Readiness summary', description: 'Latest production-readiness result (text, images, video provider, narration, FFmpeg, YouTube access, metadata rules).', inputSchema: {}, annotations: readOnly },
     async () => json(await client.readiness()));
+
+  tool('get_usage', {
+    title: 'Provider usage & cost',
+    description: 'What the OpenAI calls cost, priced from the usage object of every response against utils/openai-pricing.json (override: config/openai-pricing.json): today, month-to-date, last N days, per model, per day, per purpose and per production. Chat and image amounts are exact token counts × list price; TTS is estimated from generated audio minutes. This is what Lumen recorded, not the OpenAI invoice — compare with platform.openai.com/usage.',
+    inputSchema: { days: z.number().int().min(1).max(365).default(30) }, annotations: readOnly
+  }, async ({ days }) => json(await client.usage(days)));
 
   tool('run_readiness_check', {
     title: 'Run readiness check',

@@ -616,6 +616,26 @@ class Database {
         completed_at TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
       )`,
+      // Provider usage ledger: one row per priced API call (see utils/usage-ledger.js)
+      `CREATE TABLE IF NOT EXISTS provider_usage (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        endpoint TEXT,
+        model TEXT,
+        job_id TEXT,
+        production_id TEXT,
+        scene_id TEXT,
+        purpose TEXT,
+        units TEXT NOT NULL DEFAULT '{}',
+        amount REAL,
+        currency TEXT,
+        estimated INTEGER DEFAULT 1,
+        pricing_version TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_provider_usage_production ON provider_usage(production_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_provider_usage_job ON provider_usage(job_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_provider_usage_created ON provider_usage(created_at)`,
             // System Settings
       `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -2639,10 +2659,237 @@ class Database {
       script: JSON.parse(row.script || '{}'),
       thumbnail: selectedThumbnail?.concept ? { ...thumbnail, concept: selectedThumbnail.concept } : thumbnail,
       seo: JSON.parse(row.seo || '{}'),
-      productionCost: this.summarizeProductionCost(sourceScenes),
+      productionCost: await this.resolveProductionCost(sourceProductionId, sourceScenes),
       retentionScenes: this.buildRetentionSceneContext(sourceScenes, shortClip),
       retentionDuration: isShort ? shortClip?.duration || null : sourceScenes.reduce((sum, scene) => sum + Number(scene.duration || 0), 0)
     };
+  }
+
+  // ---- provider usage ledger -------------------------------------------
+
+  async recordProviderUsage(entry = {}) {
+    await this.executeQuery(
+      `INSERT INTO provider_usage (
+        id, provider, endpoint, model, job_id, production_id, scene_id, purpose,
+        units, amount, currency, estimated, pricing_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        entry.id || this.generateId('usage'), entry.provider || 'openai', entry.endpoint || null, entry.model || null,
+        entry.jobId || null, entry.productionId || null, entry.sceneId || null, entry.purpose || null,
+        JSON.stringify(entry.units || {}), Number.isFinite(entry.amount) ? entry.amount : null, entry.currency || null,
+        entry.estimated === false ? 0 : 1, entry.pricingVersion || null, entry.createdAt || new Date().toISOString()
+      ]
+    );
+  }
+
+  async attachUsageToProduction(jobId, productionId) {
+    if (!jobId || !productionId) return 0;
+    const result = await this.executeQuery(
+      'UPDATE provider_usage SET production_id = ? WHERE job_id = ? AND production_id IS NULL',
+      [productionId, jobId]
+    );
+    return result.changes || 0;
+  }
+
+  aggregateUsageRows(rows = []) {
+    const currencies = new Set();
+    const byModel = new Map();
+    let amount = 0;
+    let pricedCalls = 0;
+    let unpricedCalls = 0;
+    let estimatedCalls = 0;
+    for (const row of rows) {
+      const key = `${row.provider}:${row.model || 'unknown'}:${row.endpoint || ''}`;
+      const bucket = byModel.get(key) || {
+        provider: row.provider, model: row.model, endpoint: row.endpoint, calls: 0, amount: 0, unpricedCalls: 0
+      };
+      bucket.calls++;
+      if (row.amount === null || row.amount === undefined) {
+        unpricedCalls++;
+        bucket.unpricedCalls++;
+      } else {
+        amount += Number(row.amount);
+        bucket.amount += Number(row.amount);
+        pricedCalls++;
+        if (row.currency) currencies.add(String(row.currency).toUpperCase());
+      }
+      if (Number(row.estimated) === 1) estimatedCalls++;
+      byModel.set(key, bucket);
+    }
+    return {
+      amount: Number(amount.toFixed(4)),
+      currency: currencies.size === 1 ? [...currencies][0] : currencies.size ? 'MIXED' : null,
+      calls: rows.length,
+      pricedCalls,
+      unpricedCalls,
+      estimatedCalls,
+      complete: unpricedCalls === 0,
+      exact: unpricedCalls === 0 && estimatedCalls === 0,
+      byModel: [...byModel.values()]
+        .map(bucket => ({ ...bucket, amount: Number(bucket.amount.toFixed(4)) }))
+        .sort((a, b) => b.amount - a.amount)
+    };
+  }
+
+  async getProductionUsageCost(productionId) {
+    const rows = await this.getAllRows(
+      'SELECT * FROM provider_usage WHERE production_id = ? ORDER BY created_at',
+      [productionId]
+    );
+    return { productionId, ...this.aggregateUsageRows(rows) };
+  }
+
+  async getUsageSummary(options = {}) {
+    const days = Math.max(1, Math.min(365, parseInt(options.days, 10) || 30));
+    const now = new Date();
+    const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+    const earliest = since < monthStart ? since : monthStart;
+    const rows = await this.getAllRows(
+      'SELECT * FROM provider_usage WHERE created_at >= ? ORDER BY created_at',
+      [earliest]
+    );
+    const windowRows = rows.filter(row => row.created_at >= since);
+    const allTime = await this.getRow(
+      `SELECT COUNT(*) AS calls, COALESCE(SUM(amount), 0) AS amount,
+              SUM(CASE WHEN amount IS NULL THEN 1 ELSE 0 END) AS unpricedCalls
+       FROM provider_usage`
+    );
+
+    const byDay = new Map();
+    const byProduction = new Map();
+    const byPurpose = new Map();
+    for (const row of windowRows) {
+      const day = String(row.created_at).slice(0, 10);
+      byDay.set(day, (byDay.get(day) || 0) + Number(row.amount || 0));
+      const purpose = row.purpose || 'untracked';
+      byPurpose.set(purpose, (byPurpose.get(purpose) || 0) + Number(row.amount || 0));
+      const productionKey = row.production_id || (row.job_id ? `job:${row.job_id}` : null);
+      if (!productionKey) continue;
+      const bucket = byProduction.get(productionKey) || { productionId: row.production_id || null, jobId: row.job_id || null, calls: 0, amount: 0, unpricedCalls: 0 };
+      bucket.calls++;
+      if (row.amount === null || row.amount === undefined) bucket.unpricedCalls++;
+      else bucket.amount += Number(row.amount);
+      byProduction.set(productionKey, bucket);
+    }
+
+    const productionIds = [...byProduction.values()].map(bucket => bucket.productionId).filter(Boolean);
+    const titles = new Map();
+    if (productionIds.length) {
+      const placeholders = productionIds.map(() => '?').join(', ');
+      const jobs = await this.getAllRows(
+        `SELECT production_id, title FROM generation_jobs WHERE production_id IN (${placeholders})`,
+        productionIds
+      );
+      for (const job of jobs) if (job.title) titles.set(job.production_id, job.title);
+    }
+
+    return {
+      windowDays: days,
+      since,
+      currency: this.aggregateUsageRows(windowRows).currency,
+      efficiency: await this.getUsageEfficiency(),
+      today: this.aggregateUsageRows(rows.filter(row => row.created_at >= todayStart)),
+      monthToDate: this.aggregateUsageRows(rows.filter(row => row.created_at >= monthStart)),
+      window: this.aggregateUsageRows(windowRows),
+      allTime: {
+        calls: Number(allTime?.calls || 0),
+        amount: Number(Number(allTime?.amount || 0).toFixed(4)),
+        unpricedCalls: Number(allTime?.unpricedCalls || 0)
+      },
+      byDay: [...byDay.entries()].map(([date, amount]) => ({ date, amount: Number(amount.toFixed(4)) })),
+      byPurpose: [...byPurpose.entries()].map(([purpose, amount]) => ({ purpose, amount: Number(amount.toFixed(4)) })),
+      byProduction: [...byProduction.values()]
+        .map(bucket => ({ ...bucket, title: titles.get(bucket.productionId) || null, amount: Number(bucket.amount.toFixed(4)) }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 20)
+    };
+  }
+
+  // Cost per outcome: productions that have ledger rows AND a real (non-simulated)
+  // performance snapshot. The latest snapshot per production wins.
+  async getUsageEfficiency() {
+    const rows = await this.getAllRows(
+      `SELECT u.production_id AS productionId, u.amount, u.calls, u.unpricedCalls,
+              ps.metrics, ps.measured_at AS measuredAt, ps.measurement_window AS measurementWindow,
+              COALESCE(sched.title, job.title) AS title, sched.published_at AS publishedAt
+       FROM (
+         SELECT production_id, SUM(amount) AS amount, COUNT(*) AS calls,
+                SUM(CASE WHEN amount IS NULL THEN 1 ELSE 0 END) AS unpricedCalls
+         FROM provider_usage WHERE production_id IS NOT NULL GROUP BY production_id
+       ) u
+       JOIN performance_snapshots ps ON ps.production_id = u.production_id AND ps.simulated = 0
+       LEFT JOIN publish_schedule sched ON sched.production_id = u.production_id AND sched.status = 'published'
+       LEFT JOIN generation_jobs job ON job.production_id = u.production_id
+       ORDER BY ps.measured_at DESC`
+    );
+    const latest = new Map();
+    for (const row of rows) if (!latest.has(row.productionId)) latest.set(row.productionId, row);
+    const videos = [...latest.values()].map(row => {
+      let metrics = {};
+      try { metrics = JSON.parse(row.metrics || '{}'); } catch { metrics = {}; }
+      const views = Number(metrics.views || 0);
+      const netSubscribers = metrics.netSubscribers === null || metrics.netSubscribers === undefined ? null : Number(metrics.netSubscribers);
+      const cost = Number(row.amount || 0);
+      return {
+        productionId: row.productionId,
+        title: row.title || row.productionId,
+        publishedAt: row.publishedAt || null,
+        measurementWindow: row.measurementWindow,
+        cost: Number(cost.toFixed(4)),
+        unpricedCalls: Number(row.unpricedCalls || 0),
+        views,
+        netSubscribers,
+        costPer1kViews: views > 0 ? Number((cost / views * 1000).toFixed(4)) : null,
+        costPerSubscriber: netSubscribers !== null && netSubscribers > 0 ? Number((cost / netSubscribers).toFixed(4)) : null
+      };
+    });
+    const totalCost = videos.reduce((sum, video) => sum + video.cost, 0);
+    const totalViews = videos.reduce((sum, video) => sum + video.views, 0);
+    const subscriberVideos = videos.filter(video => video.netSubscribers !== null);
+    const totalSubscribers = subscriberVideos.reduce((sum, video) => sum + video.netSubscribers, 0);
+    const published = await this.getRow(
+      `SELECT COUNT(DISTINCT s.production_id) AS videos, COALESCE(SUM(u.amount), 0) AS amount
+       FROM publish_schedule s
+       JOIN (SELECT production_id, SUM(amount) AS amount FROM provider_usage WHERE production_id IS NOT NULL GROUP BY production_id) u
+         ON u.production_id = s.production_id
+       WHERE s.status = 'published'`
+    );
+    const publishedVideos = Number(published?.videos || 0);
+    return {
+      measuredVideos: videos.length,
+      publishedVideos,
+      costPerPublishedVideo: publishedVideos ? Number((Number(published.amount || 0) / publishedVideos).toFixed(4)) : null,
+      costPer1kViews: totalViews > 0 ? Number((totalCost / totalViews * 1000).toFixed(4)) : null,
+      costPerSubscriber: totalSubscribers > 0 ? Number((totalCost / totalSubscribers).toFixed(4)) : null,
+      totalViews,
+      totalSubscribers: subscriberVideos.length ? totalSubscribers : null,
+      totalCost: Number(totalCost.toFixed(4)),
+      videos: videos
+        .sort((a, b) => (a.costPer1kViews ?? Infinity) - (b.costPer1kViews ?? Infinity))
+        .slice(0, 10)
+    };
+  }
+
+  // The outcome/ROI studio prefers the ledger; scene metadata is the legacy fallback.
+  async resolveProductionCost(productionId, scenes = []) {
+    const usage = productionId ? await this.getProductionUsageCost(productionId) : null;
+    if (usage?.calls) {
+      const currency = usage.currency && usage.currency !== 'MIXED' ? usage.currency : null;
+      return {
+        amount: usage.amount,
+        currency,
+        complete: usage.complete && usage.currency !== 'MIXED',
+        estimated: !usage.exact,
+        knownEntries: usage.pricedCalls,
+        unknownEntries: usage.unpricedCalls,
+        freeEntries: 0,
+        providers: [...new Set(usage.byModel.map(bucket => bucket.provider))],
+        source: 'provider_usage'
+      };
+    }
+    return { ...this.summarizeProductionCost(scenes), source: 'scene_metadata' };
   }
 
   summarizeProductionCost(scenes = []) {

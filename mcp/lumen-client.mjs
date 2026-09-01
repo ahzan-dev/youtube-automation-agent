@@ -140,6 +140,7 @@ export class LumenClient {
 
   // ---- readiness ------------------------------------------------------
   readiness() { return this.get('/api/readiness'); }
+  usage(days) { return this.get('/api/usage', { days }); }
   runReadiness({ includePaidMedia = false, includePaidVideo = false } = {}) {
     return this.post('/api/readiness/run', { includePaidMedia, includePaidVideo }, { timeoutMs: 600_000 });
   }

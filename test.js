@@ -64,7 +64,8 @@ class SystemTest {
       { name: 'Engagement AI Provider Wiring', test: () => this.testEngagementAIProviderWiring() },
       { name: 'Engagement Sync Schedule', test: () => this.testEngagementSyncSchedule() },
       { name: 'Growth Experiment Refresh Schedule', test: () => this.testGrowthExperimentRefreshSchedule() },
-      { name: 'Daily Generation Kill Switch', test: () => this.testDailyGenerationKillSwitch() }
+      { name: 'Daily Generation Kill Switch', test: () => this.testDailyGenerationKillSwitch() },
+      { name: 'Provider Usage Ledger', test: () => this.testProviderUsageLedger() }
     ];
 
     let passed = 0;
@@ -3324,6 +3325,83 @@ class SystemTest {
     if (generated !== 1) throw new Error('daily_content_enabled=true must allow the 06:00 generation');
   }
 
+  async testProviderUsageLedger() {
+    const { UsageLedger } = require('./utils/usage-ledger');
+    const ledger = new UsageLedger({ pricing: {
+      version: 'test', currency: 'USD', aliases: { 'gpt-5.6': 'gpt-5.6-sol' },
+      models: {
+        'gpt-5.6-sol': { kind: 'chat', input_per_million: 4, cached_input_per_million: 0.4, output_per_million: 20 },
+        'gpt-image-2': { kind: 'image', text_input_per_million: 5, image_input_per_million: 8, cached_image_input_per_million: 2, image_output_per_million: 30 },
+        'gpt-4o-mini-tts': { kind: 'speech', text_input_per_million: 0.6, audio_output_per_minute_estimate: 0.015 }
+      }
+    } });
+
+    // (800 uncached × $4 + 200 cached × $0.40 + 500 output × $20) / 1M — reasoning tokens are already inside completion_tokens
+    const chat = ledger.priceChatCompletion({ model: 'gpt-5.6-2026-08-01', usage: {
+      prompt_tokens: 1000, completion_tokens: 500,
+      prompt_tokens_details: { cached_tokens: 200 }, completion_tokens_details: { reasoning_tokens: 300 }
+    } });
+    if (chat.amount !== 0.01328 || chat.estimated || chat.units.reasoningTokens !== 300) throw new Error(`Chat pricing wrong: ${JSON.stringify(chat)}`);
+    // (100 text × $5 + 5000 image output × $30) / 1M
+    const image = ledger.priceImage({ model: 'gpt-image-2', usage: { input_tokens: 100, output_tokens: 5000, input_tokens_details: { text_tokens: 100, image_tokens: 0 } } });
+    if (image.amount !== 0.1505 || image.estimated) throw new Error(`Image pricing wrong: ${JSON.stringify(image)}`);
+    // 100 text tokens × $0.60 / 1M + 2 minutes × $0.015 — an estimate, flagged as such
+    const speech = ledger.priceSpeech({ model: 'gpt-4o-mini-tts', inputCharacters: 400, audioSeconds: 120 });
+    if (speech.amount !== 0.03006 || !speech.estimated) throw new Error(`Speech pricing wrong: ${JSON.stringify(speech)}`);
+    const unknown = ledger.priceChatCompletion({ model: 'kimi-k3', usage: { prompt_tokens: 10, completion_tokens: 10 } });
+    if (unknown.amount !== null) throw new Error('Models missing from the price table must stay unpriced, never guessed');
+
+    const db = new Database();
+    await db.initialize();
+    ledger.bindStore(db);
+    const jobId = `job_usage_test_${Date.now()}`;
+    const productionId = `prod_usage_test_${Date.now()}`;
+    try {
+      await ledger.runWithContext({ jobId, purpose: 'generation' }, async () => {
+        await ledger.record({ provider: 'openai', endpoint: 'chat.completions', model: 'gpt-5.6-sol', ...chat });
+        await ledger.runWithContext({ sceneId: 'scene_1' }, () =>
+          ledger.record({ provider: 'openai', endpoint: 'images.generate', model: 'gpt-image-2', ...image }));
+      });
+      const attached = await db.attachUsageToProduction(jobId, productionId);
+      if (attached !== 2) throw new Error(`Expected both usage rows to attach to the production, got ${attached}`);
+      const cost = await db.getProductionUsageCost(productionId);
+      if (cost.calls !== 2 || Math.abs(cost.amount - 0.1638) > 1e-6 || !cost.complete || !cost.exact) {
+        throw new Error(`Production cost wrong: ${JSON.stringify(cost)}`);
+      }
+      const summary = await db.getUsageSummary({ days: 1 });
+      const mine = summary.byProduction.find(entry => entry.productionId === productionId);
+      if (!mine || summary.today.amount < 0.1638 || summary.byPurpose.every(entry => entry.purpose !== 'generation')) {
+        throw new Error(`Usage summary wrong: ${JSON.stringify(summary)}`);
+      }
+      const resolved = await db.resolveProductionCost(productionId, []);
+      if (resolved.source !== 'provider_usage' || resolved.amount !== cost.amount || resolved.complete !== true) {
+        throw new Error('The outcome studio must take production cost from the ledger when it has rows');
+      }
+      // A real performance snapshot turns cost into cost-per-outcome; a simulated one must not.
+      await db.executeQuery(
+        `INSERT INTO performance_snapshots (id, video_id, production_id, measurement_window, published_at, metrics, content_attributes, baseline, deltas, confidence, simulated, measured_at)
+         VALUES (?, ?, ?, ?, ?, ?, '{}', '{}', '{}', 'low', ?, ?)`,
+        [`snap_${jobId}_sim`, `vid_${jobId}`, productionId, '7d', new Date().toISOString(), JSON.stringify({ views: 999999, netSubscribers: 1 }), 1, new Date().toISOString()]
+      );
+      const simulatedOnly = await db.getUsageEfficiency();
+      if (simulatedOnly.videos.some(video => video.productionId === productionId)) throw new Error('Simulated snapshots must not feed cost efficiency');
+      await db.executeQuery(
+        `INSERT INTO performance_snapshots (id, video_id, production_id, measurement_window, published_at, metrics, content_attributes, baseline, deltas, confidence, simulated, measured_at)
+         VALUES (?, ?, ?, ?, ?, ?, '{}', '{}', '{}', 'medium', 0, ?)`,
+        [`snap_${jobId}_real`, `vid_${jobId}_real`, productionId, '28d', new Date().toISOString(), JSON.stringify({ views: 2000, netSubscribers: 4 }), new Date().toISOString()]
+      );
+      const efficiency = await db.getUsageEfficiency();
+      const video = efficiency.videos.find(entry => entry.productionId === productionId);
+      // 0.1638 / 2000 views × 1000 = 0.0819 per 1k views; 0.1638 / 4 subscribers = 0.04095
+      if (!video || Math.abs(video.costPer1kViews - 0.0819) > 1e-4 || Math.abs(video.costPerSubscriber - 0.04095) > 1e-4) {
+        throw new Error(`Cost efficiency wrong: ${JSON.stringify(video)}`);
+      }
+    } finally {
+      await db.executeQuery('DELETE FROM provider_usage WHERE job_id = ?', [jobId]);
+      await db.executeQuery('DELETE FROM performance_snapshots WHERE production_id = ?', [productionId]);
+      await db.close();
+    }
+  }
 }
 
 // Run tests if called directly

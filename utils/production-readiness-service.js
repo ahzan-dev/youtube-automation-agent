@@ -7,6 +7,7 @@ const { checkFFmpeg, runFFmpeg } = require('./ffmpeg');
 const { validateYouTubeMetadata } = require('./youtube-metadata-validator');
 const { Logger } = require('./logger');
 const { MediaGenerationService } = require('./media-generation-service');
+const { ledger } = require('./usage-ledger');
 
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -107,7 +108,7 @@ class ProductionReadinessService {
   async executeCheck(id, label, blocking, probe) {
     const started = Date.now();
     try {
-      const result = await probe();
+      const result = await ledger.runWithContext({ purpose: 'readiness' }, probe);
       return {
         id,
         label,
