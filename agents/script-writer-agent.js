@@ -111,9 +111,11 @@ Return only valid JSON with this exact shape:
 {
   "title": "compelling title under 100 characters",
   "hook": "opening hook in one sentence",
+  "introduction": "two or three spoken sentences that welcome the viewer and frame the topic; never claim credentials, research time, or experience",
   "sections": [
     { "title": "section title", "content": ["spoken script bullet"], "duration": 60 }
   ],
+  "conclusion": "two to four spoken sentences that recap the specific points made in this script",
   "cta": "clear call to action",
   "claims": [
     { "text": "specific factual claim a reviewer must verify", "riskLevel": "standard|high", "sourceUrls": ["exact supplied source URL"] }
@@ -153,12 +155,12 @@ Avoid fabricated statistics, unsupported claims, and fake urgency. List every ex
       return {
         title: String(parsed.title).slice(0, 100),
         hook: this.normalizeAIHook(parsed.hook),
-        introduction: await this.generateIntroduction(strategy),
+        introduction: this.normalizeAIIntroduction(parsed.introduction) || await this.generateIntroduction(strategy),
         mainContent: {
           sections,
           totalDuration: this.calculateSectionsDuration(sections)
         },
-        conclusion: await this.generateConclusion(strategy),
+        conclusion: this.normalizeAIConclusion(parsed.conclusion) || await this.generateConclusion(strategy),
         callToAction: this.normalizeAICTA(parsed.cta, strategy),
         duration: this.estimateDuration({ sections }),
         tone: template.tone,
@@ -241,6 +243,20 @@ Avoid fabricated statistics, unsupported claims, and fake urgency. List every ex
         .map(url => String(url))
         .filter(url => allowedUrls.has(url)))]
     })).filter(item => item.text);
+  }
+
+  // The model's intro/conclusion arrive as prose; keep the object shapes the
+  // narration builder and scene manifest expect, with the prose in one field.
+  normalizeAIIntroduction(intro) {
+    const text = String(typeof intro === 'object' && intro !== null ? intro.text || '' : intro || '').trim();
+    if (text.length < 20) return null;
+    return { greeting: '', topicIntro: text, valueProposition: '', credibility: '', duration: '0:05-0:25' };
+  }
+
+  normalizeAIConclusion(conclusion) {
+    const text = String(typeof conclusion === 'object' && conclusion !== null ? conclusion.text || '' : conclusion || '').trim();
+    if (text.length < 20) return null;
+    return { type: 'conclusion', title: 'Wrapping Up', recap: [], finalThought: text, duration: '30 seconds' };
   }
 
   normalizeAICTA(cta, strategy) {
@@ -367,14 +383,13 @@ Avoid fabricated statistics, unsupported claims, and fake urgency. List every ex
   }
 
   getCredibilityStatement(_strategy) {
+    // Never invent credentials or research effort the channel does not have.
     const statements = [
-      "I've spent months researching this topic",
-      "After working with hundreds of people on this",
-      "Based on the latest research and data",
-      "Drawing from real-world experience",
-      "Using proven methods and strategies"
+      "Let's get into it.",
+      "Here's what is actually going on.",
+      "Let's break it down step by step."
     ];
-    
+
     return statements[Math.floor(Math.random() * statements.length)];
   }
 

@@ -53,7 +53,9 @@ function scriptScenes(script = {}) {
     });
   }
   if (script.callToAction) {
-    const scriptText = Object.values(script.callToAction).filter(value => typeof value === 'string').join(' ');
+    // Mirror the narration builder: spoken lines only, never the type/duration labels.
+    const scriptText = [script.callToAction.subscribe, script.callToAction.like, script.callToAction.comment]
+      .filter(value => typeof value === 'string' && value.trim()).join(' ');
     if (scriptText) scenes.push({
       label: 'Call to action', scriptText,
       prompt: `${scriptText}. Clean closing visual with open composition, no captions or on-screen text.`

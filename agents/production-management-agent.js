@@ -165,16 +165,20 @@ class ProductionManagementAgent {
     
     // Add introduction
     if (script.introduction) {
-      ttsText += `${script.introduction.greeting}\n`;
-      ttsText += `${script.introduction.topicIntro}\n`;
-      ttsText += `${script.introduction.valueProposition}\n`;
-      ttsText += `${script.introduction.credibility}\n\n`;
+      const intro = [
+        script.introduction.greeting,
+        script.introduction.topicIntro,
+        script.introduction.valueProposition,
+        script.introduction.credibility
+      ].filter(line => typeof line === 'string' && line.trim());
+      if (intro.length) ttsText += `${intro.join('\n')}\n\n`;
     }
     
     // Add main content
     if (script.mainContent && script.mainContent.sections) {
-      script.mainContent.sections.forEach((section, index) => {
-        ttsText += `Section ${index + 1}: ${section.title}\n`;
+      script.mainContent.sections.forEach((section) => {
+        // Spoken heading only — "Section 3:" sounds like a document being read aloud.
+        if (section.title) ttsText += `${section.title}.\n`;
         
         if (Array.isArray(section.content)) {
           section.content.forEach(line => {
@@ -201,12 +205,12 @@ class ProductionManagementAgent {
     
     // Add conclusion
     if (script.conclusion) {
-      script.conclusion.recap.forEach(line => {
-        if (typeof line === 'string') {
+      (script.conclusion.recap || []).forEach(line => {
+        if (typeof line === 'string' && line.trim()) {
           ttsText += `${line}\n`;
         }
       });
-      ttsText += `\n${script.conclusion.finalThought}\n\n`;
+      if (script.conclusion.finalThought) ttsText += `\n${script.conclusion.finalThought}\n\n`;
     }
     
     // Add CTA
