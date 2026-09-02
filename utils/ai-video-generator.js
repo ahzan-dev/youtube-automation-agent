@@ -175,35 +175,74 @@ class AIVideoGenerator {
   }
 
   async generateGeminiTTS(text, outputPath) {
-    const model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
-    const voiceName = process.env.GEMINI_TTS_VOICE || 'Kore';
-
-    const response = await this.gemini.models.generateContent({
-      model,
-      contents: [{ parts: [{ text }] }],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName }
-          }
-        }
-      }
-    });
-
-    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioData) {
-      throw new Error('Gemini TTS returned no audio data');
-    }
-
-    // Gemini returns raw PCM (24kHz, mono, 16-bit); encode to the requested container via FFmpeg
+    // A full narration in one request means a huge response payload (raw PCM as
+    // base64) and fails at the transport level ("fetch failed"). Synthesize in
+    // paragraph chunks and concatenate the PCM, which is trivially appendable.
+    const chunks = this.splitTTSText(text, Number(process.env.GEMINI_TTS_CHUNK_CHARS || 2500));
     const pcmPath = outputPath + '.pcm';
-    await fs.writeFile(pcmPath, Buffer.from(audioData, 'base64'));
+    await fs.writeFile(pcmPath, Buffer.alloc(0));
+    for (let index = 0; index < chunks.length; index++) {
+      const audio = await this.geminiTTSChunk(chunks[index], index + 1, chunks.length);
+      await fs.appendFile(pcmPath, audio);
+    }
+    // Gemini returns raw PCM (24kHz, mono, 16-bit); encode via FFmpeg
     await runFFmpeg(['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcmPath, outputPath]);
     await fs.unlink(pcmPath).catch(() => {});
-
-    this.logger.info('Gemini TTS generation complete');
+    this.logger.info(`Gemini TTS generation complete (${chunks.length} chunk${chunks.length === 1 ? '' : 's'})`);
     return outputPath;
+  }
+
+  splitTTSText(text, maxChars = 2500) {
+    const paragraphs = String(text).split(/\n+/).map(part => part.trim()).filter(Boolean);
+    const chunks = [];
+    let current = '';
+    const push = () => { if (current.trim()) chunks.push(current.trim()); current = ''; };
+    for (const paragraph of paragraphs) {
+      if ((current + '\n' + paragraph).length > maxChars) {
+        push();
+        if (paragraph.length > maxChars) {
+          // fall back to sentence boundaries for a single huge paragraph
+          for (const sentence of paragraph.split(/(?<=[.!?])\s+/)) {
+            if ((current + ' ' + sentence).length > maxChars) push();
+            current = current ? current + ' ' + sentence : sentence;
+          }
+          continue;
+        }
+      }
+      current = current ? current + '\n' + paragraph : paragraph;
+    }
+    push();
+    return chunks.length ? chunks : [String(text).slice(0, maxChars)];
+  }
+
+  async geminiTTSChunk(text, index, total, attempt = 1) {
+    const model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
+    const voiceName = process.env.GEMINI_TTS_VOICE || 'Kore';
+    try {
+      const response = await this.gemini.models.generateContent({
+        model,
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName }
+            }
+          }
+        }
+      });
+      const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!audioData) throw new Error('Gemini TTS returned no audio data');
+      return Buffer.from(audioData, 'base64');
+    } catch (error) {
+      // transient transport/rate errors: back off once per chunk before failing
+      if (attempt < 3) {
+        this.logger.warn(`Gemini TTS chunk ${index}/${total} failed (${error.message}); retrying in ${5 * attempt}s`);
+        await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
+        return this.geminiTTSChunk(text, index, total, attempt + 1);
+      }
+      throw error;
+    }
   }
 
   async generateVisualAssets(prompt, style = "ethereal", count = 1) {
