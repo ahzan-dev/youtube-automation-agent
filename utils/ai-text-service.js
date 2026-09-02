@@ -1,4 +1,5 @@
 const OpenAI = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
 const { Logger } = require('./logger');
 const { ledger } = require('./usage-ledger');
 
@@ -53,11 +54,18 @@ function isReasoningModel(model) {
   return /^(gpt-5|o[1-9])/i.test(String(model || ''));
 }
 
+const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5';
+const ANTHROPIC_MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'];
+// Claude 5 models think adaptively and the thinking tokens count toward
+// max_tokens, so the visible-answer budget needs headroom on top.
+const ANTHROPIC_THINKING_HEADROOM = 6000;
+
 class AITextService {
   constructor(credentials = {}) {
     this.logger = new Logger('AITextService');
     this.client = null;
     this.gemini = null;
+    this.anthropic = null;
     this.model = null;
     this.providerName = null;
 
@@ -69,8 +77,16 @@ class AITextService {
     const apiKey = credentials.aiProvider?.apiKey;
     const model = credentials.aiProvider?.model;
 
+    if (provider === 'anthropic' && apiKey) {
+      return this._initAnthropic(apiKey, model);
+    }
     if (provider && PROVIDERS[provider] && apiKey) {
       return this._initOpenAICompatible(PROVIDERS[provider], apiKey, model);
+    }
+
+    const anthropicKey = credentials.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY;
+    if (anthropicKey) {
+      return this._initAnthropic(anthropicKey, credentials.anthropic?.model);
     }
 
     // The setup walkthrough stores the OpenAI key as credentials.openai (it is
@@ -102,6 +118,14 @@ class AITextService {
     this.logger.info(`${preset.name} initialized (model: ${this.model})`);
   }
 
+  _initAnthropic(apiKey, model) {
+    this.anthropic = new Anthropic({ apiKey });
+    this.model = model || ANTHROPIC_DEFAULT_MODEL;
+    this.providerName = 'Anthropic Claude';
+    this.providerKey = 'anthropic';
+    this.logger.info(`Anthropic initialized (model: ${this.model})`);
+  }
+
   _initGemini(apiKey, model) {
     try {
       const { GoogleGenAI } = require('@google/genai');
@@ -119,6 +143,35 @@ class AITextService {
     const model = options.model || this.model;
     const maxTokens = options.maxTokens || 2048;
     const temperature = options.temperature ?? 0.7;
+
+    if (this.anthropic) {
+      // Claude 5 models reject sampling parameters (temperature et al.) and
+      // think adaptively by default, so the request stays minimal.
+      const response = await this.anthropic.messages.create({
+        model,
+        max_tokens: maxTokens + ANTHROPIC_THINKING_HEADROOM,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      if (response.usage) {
+        const priced = ledger.priceChatCompletion({ model: response.model || model, usage: response.usage });
+        void ledger.record({ provider: 'anthropic', endpoint: 'messages', model: response.model || model, ...priced });
+      }
+      if (response.stop_reason === 'refusal') {
+        const detail = response.stop_details?.explanation || response.stop_details?.category || 'safety refusal';
+        throw new Error(`${this.providerName} declined this request (${detail}). Rephrase the prompt or route it to another provider.`);
+      }
+      const text = (response.content || [])
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+        .trim();
+      if (!text) {
+        throw new Error(response.stop_reason === 'max_tokens'
+          ? `${this.providerName} hit max_tokens before producing text. Increase maxTokens.`
+          : `${this.providerName} returned an empty response.`);
+      }
+      return text;
+    }
 
     if (this.gemini) {
       const config = { maxOutputTokens: maxTokens };
@@ -234,8 +287,8 @@ class AITextService {
   }
 
   isAvailable() {
-    return !!(this.client || this.gemini);
+    return !!(this.client || this.gemini || this.anthropic);
   }
 }
 
-module.exports = { AITextService, PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL };
+module.exports = { AITextService, PROVIDERS, GEMINI_MODELS, GEMINI_DEFAULT_MODEL, ANTHROPIC_MODELS, ANTHROPIC_DEFAULT_MODEL };

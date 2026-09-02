@@ -513,12 +513,12 @@ class CredentialManager {
   }
   // Validation methods
   hasAITextProvider() {
-    if (this.credentials.openai?.apiKey || this.credentials.gemini?.apiKey || this.credentials.aiProvider?.apiKey) {
+    if (this.credentials.openai?.apiKey || this.credentials.gemini?.apiKey || this.credentials.anthropic?.apiKey || this.credentials.aiProvider?.apiKey) {
       return true;
     }
 
     // Environment-variable based configuration (see utils/ai-text-service.js)
-    const envKeys = [...Object.values(PROVIDERS).map(p => p.envKey), 'GEMINI_API_KEY'];
+    const envKeys = [...Object.values(PROVIDERS).map(p => p.envKey), 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY'];
     return envKeys.some(key => process.env[key]);
   }
 

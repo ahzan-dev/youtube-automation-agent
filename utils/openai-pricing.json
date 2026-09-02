@@ -2,7 +2,7 @@
   "version": "2026-09-01",
   "source": "https://developers.openai.com/api/docs/pricing",
   "currency": "USD",
-  "_note": "Bundled default; copy to config/openai-pricing.json to override without rebuilding. List prices per 1M tokens. Chat and image calls are priced from the usage object OpenAI returns (exact token counts). audio.speech returns no usage, so TTS is estimated from input characters and generated audio minutes. Update this file when OpenAI changes prices; every ledger row records the version it was priced with.",
+  "_note": "Bundled default; copy to config/openai-pricing.json to override without rebuilding. List prices per 1M tokens. Chat and image calls are priced from the usage object OpenAI returns (exact token counts). audio.speech returns no usage, so TTS is estimated from input characters and generated audio minutes. Update this file when OpenAI changes prices; every ledger row records the version it was priced with. Claude rows use Anthropic list prices (per 1M tokens).",
   "aliases": {
     "gpt-5.6": "gpt-5.6-sol",
     "openai/gpt-5.6-sol": "gpt-5.6-sol",
@@ -10,22 +10,65 @@
     "openai/gpt-5.6-luna": "gpt-5.6-luna"
   },
   "models": {
-    "gpt-5.6-sol":   { "kind": "chat", "input_per_million": 4.00, "cached_input_per_million": 0.40, "output_per_million": 20.00 },
-    "gpt-5.6-terra": { "kind": "chat", "input_per_million": 2.00, "cached_input_per_million": 0.20, "output_per_million": 12.00 },
-    "gpt-5.6-luna":  { "kind": "chat", "input_per_million": 0.20, "cached_input_per_million": 0.02, "output_per_million": 1.20 },
+    "gpt-5.6-sol": {
+      "kind": "chat",
+      "input_per_million": 4.0,
+      "cached_input_per_million": 0.4,
+      "output_per_million": 20.0
+    },
+    "gpt-5.6-terra": {
+      "kind": "chat",
+      "input_per_million": 2.0,
+      "cached_input_per_million": 0.2,
+      "output_per_million": 12.0
+    },
+    "gpt-5.6-luna": {
+      "kind": "chat",
+      "input_per_million": 0.2,
+      "cached_input_per_million": 0.02,
+      "output_per_million": 1.2
+    },
     "gpt-image-2": {
       "kind": "image",
-      "text_input_per_million": 5.00,
-      "image_input_per_million": 8.00,
-      "cached_image_input_per_million": 2.00,
-      "image_output_per_million": 30.00,
-      "fallback_per_image": { "1536x1024": { "high": 0.165 }, "1024x1536": { "high": 0.165 }, "1024x1024": { "high": 0.133 } }
+      "text_input_per_million": 5.0,
+      "image_input_per_million": 8.0,
+      "cached_image_input_per_million": 2.0,
+      "image_output_per_million": 30.0,
+      "fallback_per_image": {
+        "1536x1024": {
+          "high": 0.165
+        },
+        "1024x1536": {
+          "high": 0.165
+        },
+        "1024x1024": {
+          "high": 0.133
+        }
+      }
     },
     "gpt-4o-mini-tts": {
       "kind": "speech",
-      "text_input_per_million": 0.60,
-      "audio_output_per_million": 12.00,
+      "text_input_per_million": 0.6,
+      "audio_output_per_million": 12.0,
       "audio_output_per_minute_estimate": 0.015
+    },
+    "claude-opus-5": {
+      "kind": "chat",
+      "input_per_million": 5.0,
+      "cached_input_per_million": 0.5,
+      "output_per_million": 25.0
+    },
+    "claude-sonnet-5": {
+      "kind": "chat",
+      "input_per_million": 2.0,
+      "cached_input_per_million": 0.2,
+      "output_per_million": 10.0
+    },
+    "claude-haiku-4-5": {
+      "kind": "chat",
+      "input_per_million": 1.0,
+      "cached_input_per_million": 0.1,
+      "output_per_million": 5.0
     }
   }
 }
